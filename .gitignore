@@ -1,0 +1,48 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Generated outputs (default working dirs)
+output/
+output_*/
+*.log
+
+# Local config + secrets
+config.json
+.env
+
+# Node / SvelteKit UI
+node_modules/
+.svelte-kit/
+ui/build/
+.vite/
+
+# UI user data — SQLite DB + thumbnail cache.
+# CRITICAL: must never be committed. Contains user-curated dataset groups,
+# connector links, credentials (Immich API key etc), face embeddings.
+ui/data/
+
+# macOS / Windows cruft
+.DS_Store
+Thumbs.db

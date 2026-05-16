@@ -1,0 +1,60 @@
+# FLUX.2 LoRA Grid — runtime deps for the RunPod container.
+# torch / torchvision are already in the base image (pytorch:2.5.1-cu124) —
+# do NOT re-pin them here, it would re-download ~5 GB of CUDA wheels.
+
+# --- quantization -----------------------------------------------------------
+torchao>=0.17.0,<1.0
+
+# --- attention backend ------------------------------------------------------
+# SageAttention is installed SEPARATELY in the Dockerfile as a git+source
+# build, because:
+#   - 2.x is not on PyPI (only 1.0.6 is, which lacks Blackwell sm_120 kernels)
+#   - Building from source with TORCH_CUDA_ARCH_LIST=12.0 produces native
+#     kernels for the target GPU instead of a slow PTX-JIT fallback
+# See the dedicated RUN step in Dockerfile that handles this.
+
+# --- diffusion stack --------------------------------------------------------
+# Diffusers' main branch — Flux2KleinPipeline isn't in stable releases yet.
+# Replace @main with a commit SHA in production if you want reproducibility.
+diffusers @ git+https://github.com/huggingface/diffusers.git@main
+# Same story for PEFT — the TorchaoLoraLinear bridge depends on the latest fixes.
+peft @ git+https://github.com/huggingface/peft.git@main
+transformers>=4.46.0,<6.0
+accelerate>=1.0.0
+safetensors>=0.4.5
+sentencepiece>=0.2.0
+protobuf>=4.25
+huggingface_hub>=0.25
+hf_transfer>=0.1.8
+
+# --- UI ---------------------------------------------------------------------
+gradio>=4.40.0,<7.0
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# --- face recognition (insightface + onnxruntime CUDA EP) ------------------
+insightface>=0.7.3
+onnxruntime-gpu>=1.18.0
+opencv-python-headless>=4.10
+numpy>=1.24
+
+# --- CUDA libs onnxruntime dlopens at runtime ------------------------------
+# Without these, the CUDA execution provider falls back to CPU silently.
+# Pinned to cu12.x since onnxruntime-gpu 1.x is built against CUDA 12 — the
+# container base is cu13, so we ship cu12 alongside (different SONAMEs).
+# `nvidia-cuda-runtime-cu12` is the critical one: provides libcudart.so.12,
+# the very first symbol onnxruntime tries to dlopen.
+nvidia-cuda-runtime-cu12
+nvidia-cuda-nvrtc-cu12
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+nvidia-cufft-cu12
+nvidia-curand-cu12
+nvidia-cusolver-cu12
+nvidia-cusparse-cu12
+nvidia-nvjitlink-cu12
+
+# --- optional FP8 backend (Quanto) -----------------------------------------
+# Disabled by default — torchao is the default. Uncomment if you want the
+# --fp8-backend quanto flag to work.
+# optimum-quanto>=0.2.5

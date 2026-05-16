@@ -1,0 +1,25 @@
+{
+  "_comment": "Optional config file. Pass via --config <path> on the grid CLI, or drop it next to the script as `config.json`. Defines sticky base LoRAs that stay loaded on top of every test LoRA, and the face-recognition settings used for per-row identity scoring. Remove the `face_recognition` block entirely to skip face scoring.",
+
+  "base_loras": [
+    {
+      "_comment": "Optional. Up to N LoRAs that stay loaded for the whole run on top of each test LoRA — e.g. a stylistic baseline. Each entry needs `path` + a `weight` (1.0 = full strength).",
+      "name": "style-baseline",
+      "path": "/path/to/style.safetensors",
+      "weight": 1.0
+    }
+  ],
+
+  "face_recognition": {
+    "_comment": "Provide ONE of `centroid` (JSON list of float32) or `centroid_b64` (base64-encoded float32 blob — more compact). Build one from your own reference images: `python -m glt --compute-centroid <ref_dir> --centroid-out my_centroid.json --centroid-format b64`. The placeholder below MUST be replaced before the scorer will load.",
+    "model_name": "buffalo_l",
+    "model_root": "/path/to/insightface/models",
+    "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    "det_size": [640, 640],
+    "thresholds": {
+      "good": 0.5,
+      "ok": 0.35
+    },
+    "centroid_b64": "<replace-with-output-of-glt-compute-centroid>"
+  }
+}

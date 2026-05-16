@@ -1,0 +1,74 @@
+/* Tailwind v4: single import, CSS-first config. The custom theme tokens
+ * below register design tokens — Tailwind generates utilities for each
+ * automatically (e.g. `--color-bg-1` → `bg-bg-1`, `text-bg-1`, etc.). */
+@import 'tailwindcss';
+
+@theme {
+    --color-bg-0: #0a0a0a;
+    --color-bg-1: #111111;
+    --color-bg-2: #171717;
+    --color-bg-3: #1f1f1f;
+
+    --color-border: #262626;
+    --color-border-strong: #3a3a3a;
+
+    --color-fg: #e5e5e5;
+    --color-fg-muted: #a3a3a3;
+    --color-fg-faint: #737373;
+
+    --color-accent: #8b5cf6;
+    --color-accent-hover: #a78bfa;
+
+    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+    html,
+    body {
+        @apply h-full;
+    }
+
+    body {
+        font-feature-settings: 'cv11', 'ss01';
+    }
+
+    ::selection {
+        @apply bg-accent/30 text-fg;
+    }
+}
+
+/* Tailwind v4 requires `@utility` (not `@layer components`) for classes that
+ * will be `@apply`'d elsewhere — `@apply` only sees real utilities. */
+@utility input {
+    @apply w-full rounded-md border border-border bg-bg-2 px-3 py-2 text-sm text-fg
+           placeholder:text-fg-faint
+           focus:border-accent focus:outline-hidden focus:ring-1 focus:ring-accent;
+}
+
+@utility btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm
+           font-medium transition-colors focus:outline-hidden focus:ring-1 focus:ring-accent
+           disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover;
+}
+
+@utility btn-ghost {
+    @apply btn text-fg-muted hover:bg-bg-2 hover:text-fg;
+}
+
+@utility card {
+    @apply rounded-lg border border-border bg-bg-1 p-4;
+}
+
+@utility nav-link {
+    @apply flex items-center gap-3 rounded-md px-3 py-2 text-sm text-fg-muted
+           transition-colors hover:bg-bg-2 hover:text-fg;
+}
+
+@utility nav-link-active {
+    @apply bg-bg-2 text-fg;
+}
