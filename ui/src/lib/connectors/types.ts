@@ -5,10 +5,14 @@
 /** Stable identifier per connector type. Add new ones as we wire them. */
 export type ConnectorId = 'immich' | 'google-photos' | 'hard-drive';
 
-/** How the link UI should look. 'persons' = pick from a list returned by
- * listPersons (Immich, Google Photos, …); 'folder' = ask the user for a
- * filesystem path that becomes the "person_id" (hard-drive). */
-export type LinkerKind = 'persons' | 'folder';
+/** How the link UI should look.
+ *   'persons' = pick from a list returned by listPersons (Immich).
+ *   'folder'  = ask the user for a filesystem path that becomes the
+ *               "person_id" (hard-drive).
+ *   'picker'  = launch an external picker session that bulk-imports
+ *               photos into a connector-owned local cache; the cache dir
+ *               becomes the link's person_id (google-photos). */
+export type LinkerKind = 'persons' | 'folder' | 'picker';
 
 /** Per-connector metadata for the registry. */
 export interface ConnectorTypeInfo {
@@ -22,6 +26,10 @@ export interface ConnectorTypeInfo {
     /** Form fields the Settings UI should render for sign-in. Empty/absent
      * when needs_credentials is false. */
     credentials_fields?: CredentialField[];
+    /** When set, the Settings "Add" / "Re-sign-in" button is a link to
+     * this URL (the connector's OAuth start route) instead of a modal.
+     * Mutually exclusive with credentials_fields in practice. */
+    oauth_start_url?: string;
 }
 
 export interface CredentialField {

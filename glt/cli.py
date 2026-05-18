@@ -31,6 +31,11 @@ def main(argv: list[str] | None = None) -> None:
         server.main(argv)
         return
     from .modes import grid
+    # `--grid` is the default mode and not an arg the grid parser recognizes
+    # — consume it here so explicit `python -m glt --grid …` invocations
+    # (and the dashboard's job handler) still work.
+    if "--grid" in argv:
+        argv = [a for a in argv if a != "--grid"]
     # `grid.run()` calls its own `parse_args()` which reads sys.argv directly.
     # We restore sys.argv so the parser sees exactly what the user typed,
     # regardless of how main() was invoked.

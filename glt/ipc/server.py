@@ -72,7 +72,23 @@ class _Handler(BaseHTTPRequestHandler):
                     raise ValueError("empty body")
                 blob = self.rfile.read(length)
                 config_path = self.headers.get("x-glt-config-path") or None
-                result = face_service.detect_faces_blob(blob, config_path=config_path)
+                # Caller-supplied CUDA mem cap (GiB). When present, it
+                # overrides whatever's in config.json's face_recognition
+                # section. Float OK for fractional GiB caps.
+                gpu_mem_gb: float | None = None
+                raw_cap = self.headers.get("x-glt-face-gpu-mem-gb")
+                if raw_cap:
+                    try:
+                        v = float(raw_cap)
+                        if v > 0:
+                            gpu_mem_gb = v
+                    except ValueError:
+                        pass
+                result = face_service.detect_faces_blob(
+                    blob,
+                    config_path=config_path,
+                    gpu_mem_limit_gb=gpu_mem_gb,
+                )
                 self._send_json(200, result)
             except Exception as e:
                 _stderr(f"[face-blob][error] {type(e).__name__}: {e}")

@@ -14,6 +14,10 @@ export interface ConnectorLink {
     person_name: string | null;
     person_thumb_url: string | null;
     linked_at: string;
+    /** Set by connectors that snapshot photos into a local cache (e.g.
+     * google-photos picker). NULL for live-source connectors. */
+    last_sync_at: string | null;
+    last_sync_count: number | null;
 }
 
 const upsertStmt = db.prepare(`
@@ -28,15 +32,32 @@ const upsertStmt = db.prepare(`
 const deleteStmt = db.prepare(
     'DELETE FROM connector_links WHERE scope_kind = ? AND scope_key = ? AND connector_id = ?'
 );
+const LINK_COLUMNS =
+    'scope_kind, scope_key, connector_id, person_id, person_name, person_thumb_url, linked_at, last_sync_at, last_sync_count';
+
 const listForScopeStmt = db.prepare(
-    'SELECT scope_kind, scope_key, connector_id, person_id, person_name, person_thumb_url, linked_at FROM connector_links WHERE scope_kind = ? AND scope_key = ?'
+    `SELECT ${LINK_COLUMNS} FROM connector_links WHERE scope_kind = ? AND scope_key = ?`
 );
 const listManyForScopeStmt = (placeholders: string) =>
     db.prepare(
-        `SELECT scope_kind, scope_key, connector_id, person_id, person_name, person_thumb_url, linked_at
+        `SELECT ${LINK_COLUMNS}
          FROM connector_links
          WHERE scope_kind = ? AND scope_key IN (${placeholders})`
     );
+const updateSyncStmt = db.prepare(
+    `UPDATE connector_links
+     SET last_sync_at = datetime('now'), last_sync_count = ?
+     WHERE scope_kind = ? AND scope_key = ? AND connector_id = ?`
+);
+
+export function recordSync(
+    scopeKind: LinkScope,
+    scopeKey: string,
+    connectorId: ConnectorId,
+    count: number
+): void {
+    updateSyncStmt.run(count, scopeKind, scopeKey, connectorId);
+}
 
 export function listLinksForScope(scopeKind: LinkScope, scopeKey: string): ConnectorLink[] {
     return listForScopeStmt.all(scopeKind, scopeKey) as ConnectorLink[];

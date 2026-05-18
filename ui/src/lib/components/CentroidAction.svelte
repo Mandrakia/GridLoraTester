@@ -19,13 +19,13 @@
         label?: string;
         /** Existing persisted state, or null when never computed. */
         centroid: CentroidSummary | null;
-        /** The form action endpoint suffix, e.g. '?/compute-centroid'. */
+        /** The form action endpoint suffix, e.g. '?/analyze'. */
         action?: string;
         /** Last error from a previous attempt, surfaced under the button. */
         error?: string | null;
     }
 
-    let { label = 'Calculate centroid', centroid, action = '?/compute-centroid', error = null }: Props =
+    let { label = 'Analyze dataset', centroid, action = '?/analyze', error = null }: Props =
         $props();
 
     let running = $state(false);
@@ -63,7 +63,7 @@
                 >
                     <path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round" />
                 </svg>
-                Detecting…
+                Analyzing…
             {:else}
                 {label}
             {/if}

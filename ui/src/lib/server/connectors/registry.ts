@@ -10,13 +10,14 @@ import type {
     PhotoConnector
 } from '$lib/connectors/types';
 import { listCredentials } from './credentials';
+import { GooglePhotosConnector, GOOGLE_PHOTOS_TYPE_INFO } from './google-photos';
 import { HardDriveConnector, HARD_DRIVE_TYPE_INFO } from './hard-drive';
 import { ImmichConnector, IMMICH_TYPE_INFO } from './immich';
 
 export const ALL_CONNECTORS: ConnectorTypeInfo[] = [
     IMMICH_TYPE_INFO,
-    HARD_DRIVE_TYPE_INFO
-    // Google Photos to be added in a follow-up phase.
+    HARD_DRIVE_TYPE_INFO,
+    GOOGLE_PHOTOS_TYPE_INFO
 ];
 
 /** Types that need a credentials form in /settings. Hard-drive is excluded
@@ -28,9 +29,7 @@ export const CREDENTIAL_BACKED_CONNECTORS = ALL_CONNECTORS.filter(
 const factories: Record<ConnectorId, () => PhotoConnector> = {
     immich: () => new ImmichConnector(),
     'hard-drive': () => new HardDriveConnector(),
-    'google-photos': () => {
-        throw new Error('Google Photos connector is not implemented yet.');
-    }
+    'google-photos': () => new GooglePhotosConnector()
 };
 
 export function getConnector(id: ConnectorId): PhotoConnector {

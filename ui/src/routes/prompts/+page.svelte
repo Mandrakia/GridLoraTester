@@ -1,6 +1,7 @@
 <script lang="ts">
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
+    import MainPanel from '$lib/components/MainPanel.svelte';
     import type { ActionData, PageData } from './$types';
 
     let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -39,7 +40,8 @@
     <title>Prompts — GridLoraTester</title>
 </svelte:head>
 
-<div class="mx-auto max-w-5xl space-y-6 p-8">
+<MainPanel size="narrow">
+    <div class="space-y-6">
     <header class="flex items-baseline justify-between gap-4">
         <div>
             <h1 class="text-2xl font-semibold tracking-tight">Prompts</h1>
@@ -215,4 +217,5 @@
             </form>
         </section>
     {/if}
-</div>
+    </div>
+</MainPanel>

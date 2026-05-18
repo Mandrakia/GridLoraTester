@@ -156,11 +156,15 @@ export const actions: Actions = {
         let job_id: number | null = null;
         if (personChanged) {
             try {
-                job_id = enqueue('connector-face-detect', {
-                    connector_id,
-                    person_id,
-                    person_name
-                });
+                job_id = enqueue(
+                    'connector-face-detect',
+                    {
+                        connector_id,
+                        person_id,
+                        person_name
+                    },
+                    { key_arg1: connector_id, key_arg2: person_id }
+                );
             } catch (e) {
                 // Don't fail the link itself — the user can re-enqueue
                 // manually later if needed.

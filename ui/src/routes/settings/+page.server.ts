@@ -16,14 +16,23 @@ const FIELDS: SettingKey[] = [
     'tests_root',
     'lora_root',
     'python_bin',
-    'glt_root'
+    'face_gpu_mem_limit_gb',
+    'suggestion_min_image_mp'
 ];
 
 export const load: PageServerLoad = () => {
+    const connectors = listAllConnectorStatuses();
+    const credentials: Partial<Record<ConnectorId, Record<string, unknown>>> = {};
+    for (const c of connectors) {
+        if (!c.configured) continue;
+        const row = getCredentials(c.id);
+        if (row) credentials[c.id] = row.credentials;
+    }
     return {
         settings: getSettings(),
         connector_types: CREDENTIAL_BACKED_CONNECTORS,
-        connectors: listAllConnectorStatuses()
+        connectors,
+        credentials
     };
 };
 
@@ -42,10 +51,32 @@ export const actions: Actions = {
         const patch: Record<string, string> = {};
         const warnings: Record<string, string> = {};
 
+        // Fields that name a file (must `statSync().isFile()`), separate from
+        // numeric / non-path fields that skip FS validation entirely.
         const fileFields = new Set<SettingKey>(['python_bin']);
+        const nonPathFields = new Set<SettingKey>([
+            'face_gpu_mem_limit_gb',
+            'suggestion_min_image_mp'
+        ]);
+
         for (const key of FIELDS) {
             const raw = (data.get(key) ?? '').toString();
             patch[key] = raw;
+
+            if (nonPathFields.has(key)) {
+                if (key === 'face_gpu_mem_limit_gb' && raw) {
+                    const n = Number(raw);
+                    if (!Number.isFinite(n) || n <= 0 || n > 80) {
+                        warnings[key] = 'Must be a number > 0 and ≤ 80 (GiB).';
+                    }
+                } else if (key === 'suggestion_min_image_mp' && raw) {
+                    const n = Number(raw);
+                    if (!Number.isFinite(n) || n < 0 || n > 200) {
+                        warnings[key] = 'Must be a number ≥ 0 and ≤ 200 (megapixels).';
+                    }
+                }
+                continue;
+            }
 
             if (raw) {
                 try {

@@ -19,21 +19,99 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _app = None
 _app_lock = threading.Lock()
 _app_cfg_fingerprint: str | None = None
+_inference_count = 0
+
+# Periodic session recycle bounds the worst-case VRAM accumulation. ORT's
+# BFC arena never returns memory to CUDA during a session's lifetime, so
+# the high-water mark across all images processed becomes permanent. For
+# datasets with outliers (group photos / collages with 20-30+ faces — each
+# face triggers a recognition + landmark + pose sub-model run, growing the
+# arena), the peak quickly hits the GPU's hard limit and subsequent images
+# OOM forever.
+#
+# We periodically drop the cached InsightFace app and let the next call
+# reload it (~3s cost). This actually releases the arena back to CUDA.
+#   - RECYCLE_EVERY_N_IMAGES: belt-and-braces bound regardless of payload.
+#   - RECYCLE_AFTER_NFACES: immediate trigger after a "heavy" image, since
+#     that's the one that just spiked the arena. Catches the bomb that the
+#     periodic check would miss between cadence boundaries.
+RECYCLE_EVERY_N_IMAGES = 200
+RECYCLE_AFTER_NFACES = 10
 
 
 def _stderr(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def _recycle_app() -> None:
+    """Drop the cached InsightFace app + force GC so the next call reloads
+    fresh. Called either on a fixed cadence or after a heavy image. The
+    actual reload happens lazily inside `_get_app` on the next request."""
+    global _app, _app_cfg_fingerprint, _inference_count
+    with _app_lock:
+        prev = _app
+        _app = None
+        _app_cfg_fingerprint = None
+        _inference_count = 0
+    if prev is not None:
+        del prev
+    import gc
+    gc.collect()
+    _stderr('[face] session recycled — releasing arena back to CUDA')
+
+
 def _cfg_fingerprint(face_cfg: dict) -> str:
-    """Detect when the user changed model/providers/det_size since last load —
-    we drop the cached app so the next call picks up the new config."""
+    """Detect when the user changed model/providers/det_size/gpu_mem since
+    last load — we drop the cached app so the next call picks up the new
+    config. Includes `gpu_mem_limit_gb` because the provider-options
+    monkey-patch is one-shot and only takes effect on session (re)creation."""
     return repr((
         face_cfg.get("model_name", "buffalo_l"),
         tuple(face_cfg.get("providers") or ()),
         tuple(face_cfg.get("det_size") or ()),
         face_cfg.get("model_root"),
+        face_cfg.get("gpu_mem_limit_gb"),
     ))
+
+
+def _build_provider_options(providers: list, gpu_mem_limit_gb: float | None) -> list[dict]:
+    """Build the `provider_options` list aligned with `providers` for the
+    `InferenceSession(...)` constructor.
+
+    Why this matters: `FaceAnalysis(providers=, provider_options=)` forwards
+    both kwargs down to each sub-model's `InferenceSession.__init__` (see
+    `insightface/model_zoo/model_zoo.py:94-96`). Passing options at session
+    CREATION binds them to the arena allocator and cuDNN context before any
+    inference runs, which is the only path ORT supports for memory-policy
+    knobs — `session.set_providers()` post-hoc rebinds the provider name
+    list but does NOT reset the underlying arena or cuDNN algo cache that
+    were already initialized.
+
+    The CUDA-side options we set:
+      - `cudnn_conv_algo_search='HEURISTIC'` — one-shot heuristic instead
+        of EXHAUSTIVE benchmark caching that grows per shape forever.
+      - `cudnn_conv_use_max_workspace='0'` — clamp cuDNN workspace to the
+        small default (~32 MB) instead of "as much VRAM as available".
+      - `arena_extend_strategy='kSameAsRequested'` — grow the BFC arena
+        by exactly the requested size, not power-of-two doubling.
+      - `gpu_mem_limit` (only when > 0) — hard cap. Off by default because
+        a tight cap triggers mid-run OOM when the peak working set exceeds
+        it (BFC can't shrink). Useful only when sharing the GPU.
+    """
+    opts: list[dict] = []
+    for p in providers:
+        if p == "CUDAExecutionProvider":
+            cuda_opts: dict = {
+                "cudnn_conv_algo_search": "HEURISTIC",
+                "cudnn_conv_use_max_workspace": "0",
+                "arena_extend_strategy": "kSameAsRequested",
+            }
+            if gpu_mem_limit_gb is not None and gpu_mem_limit_gb > 0:
+                cuda_opts["gpu_mem_limit"] = int(gpu_mem_limit_gb * 1024 * 1024 * 1024)
+            opts.append(cuda_opts)
+        else:
+            opts.append({})
+    return opts
 
 
 def _get_app(face_cfg: dict):
@@ -47,15 +125,30 @@ def _get_app(face_cfg: dict):
         if "CUDAExecutionProvider" in providers:
             preload_cuda12_libs(face_cfg.get("cuda12_search_dirs"))
 
+        gpu_mem_limit_gb = face_cfg.get("gpu_mem_limit_gb")
+        provider_options = _build_provider_options(providers, gpu_mem_limit_gb)
+
         from insightface.app import FaceAnalysis
         model_name = face_cfg.get("model_name", "buffalo_l")
         det_size = tuple(face_cfg.get("det_size", [640, 640]))
-        kwargs = {"name": model_name, "providers": providers}
+        kwargs = {
+            "name": model_name,
+            "providers": providers,
+            # Pass at creation time — InsightFace forwards down to every
+            # sub-model's InferenceSession constructor. Doing this post-hoc
+            # via `set_providers()` doesn't reset the already-built arena
+            # / cuDNN cache.
+            "provider_options": provider_options,
+        }
         if face_cfg.get("model_root"):
             kwargs["root"] = face_cfg["model_root"]
-        _stderr(f"[face] loading insightface model={model_name} providers={providers}")
+        _stderr(
+            f"[face] loading insightface model={model_name} providers={providers} "
+            f"opts={provider_options}"
+        )
         app = FaceAnalysis(**kwargs)
         app.prepare(ctx_id=0, det_size=det_size)
+
         _app = app
         _app_cfg_fingerprint = fp
         return _app
@@ -112,28 +205,55 @@ def _detect_one(app, image_path: Path):
     return int(w), int(h), out
 
 
-def detect_faces_blob(image_bytes: bytes, config_path: str | None = None) -> dict:
+def detect_faces_blob(
+    image_bytes: bytes,
+    config_path: str | None = None,
+    gpu_mem_limit_gb: float | None = None,
+) -> dict:
     """Single-image variant of `detect_faces`, working on raw bytes.
     Used by jobs that stream pictures from a connector — we don't write the
     blob to disk just to read it back.
+
+    `gpu_mem_limit_gb` is an optional per-request override (from the
+    dashboard's settings) for the ONNX CUDA sessions' VRAM cap. When set
+    it's merged into `face_cfg` and participates in the cache fingerprint,
+    so a change reloads the sessions on the next call.
 
     Returns `{"image_width", "image_height", "faces"}` with the same face
     dict shape as `detect_faces`. Empty `faces` (or null dims) when the
     decoder can't parse the bytes."""
     import cv2
     import numpy as _np
+    import time
 
     cfg_root = load_config(Path(config_path) if config_path else None)
-    face_cfg = (cfg_root.get("face_recognition") or {})
+    face_cfg = dict(cfg_root.get("face_recognition") or {})
+    if gpu_mem_limit_gb is not None:
+        face_cfg["gpu_mem_limit_gb"] = gpu_mem_limit_gb
     app = _get_app(face_cfg)
 
+    # Phase timing — surfaced in the response so the dashboard can compute
+    # p50/p95 across the run without an extra round-trip per image. perf_counter
+    # gives wall-clock-monotonic ns precision.
+    t0 = time.perf_counter()
     arr = _np.frombuffer(image_bytes, dtype=_np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    t_decoded = time.perf_counter()
     if img is None:
-        return {"image_width": None, "image_height": None, "faces": []}
+        return {
+            "image_width": None,
+            "image_height": None,
+            "faces": [],
+            "timing_ms": {
+                "decode": (t_decoded - t0) * 1000.0,
+                "detect": 0.0,
+                "total": (t_decoded - t0) * 1000.0,
+            },
+        }
     h, w = img.shape[:2]
 
     faces = app.get(img)
+    t_detected = time.perf_counter()
     out = []
     for i, f in enumerate(faces):
         emb = np.asarray(f.embedding, dtype=np.float32)
@@ -158,7 +278,34 @@ def detect_faces_blob(image_bytes: bytes, config_path: str | None = None) -> dic
             "yaw": yaw,
             "roll": roll,
         })
-    return {"image_width": int(w), "image_height": int(h), "faces": out}
+    t_done = time.perf_counter()
+    result = {
+        "image_width": int(w),
+        "image_height": int(h),
+        "faces": out,
+        "timing_ms": {
+            "decode": (t_decoded - t0) * 1000.0,
+            "detect": (t_detected - t_decoded) * 1000.0,
+            "total": (t_done - t0) * 1000.0,
+        },
+    }
+
+    # Bound the VRAM high-water mark: recycle after `RECYCLE_EVERY_N_IMAGES`
+    # OR immediately after a heavy image. Both checks live OUTSIDE the
+    # response so the caller already has its result by the time we reload
+    # — only the NEXT request pays the ~3 s reload cost. Increment with
+    # the lock since multiple HTTP threads may share the worker.
+    global _inference_count
+    with _app_lock:
+        _inference_count += 1
+        triggered = (
+            _inference_count >= RECYCLE_EVERY_N_IMAGES
+            or len(out) >= RECYCLE_AFTER_NFACES
+        )
+    if triggered:
+        _recycle_app()
+
+    return result
 
 
 def detect_faces(paths: list[str], recursive: bool = False,

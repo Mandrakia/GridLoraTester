@@ -61,6 +61,11 @@ export interface PyImage {
     /** Dims of the source image; null when imread failed (no faces either). */
     image_width?: number | null;
     image_height?: number | null;
+    /** BlockHash 256-bit hex perceptual hash. Python detection doesn't
+     * compute this — callers preserve it across delete+reinsert cycles by
+     * reading the existing DB row first (centroids.ts does both in
+     * recomputeFolderCentroidFromDb and computeAndPersist). */
+    phash?: string | null;
     faces: PyFace[];
 }
 

@@ -3,6 +3,9 @@
 // runner should import from here (not from `./runner` directly) to make
 // sure handlers are registered before they enqueue.
 import './handlers/connector-face-detect';
+import './handlers/compute-image-hashes';
+import './handlers/grid-test-run';
+import './handlers/test-rescore';
 
 export {
     cancel,
@@ -10,7 +13,12 @@ export {
     getJob,
     getJobLogs,
     listActiveJobs,
+    listArchiveJobs,
     listJobs,
+    listLatestJobs,
+    retry,
+    setPid,
+    type EnqueueOpts,
     type JobLogRow,
     type JobRow,
     type JobStatus

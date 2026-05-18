@@ -1,10 +1,14 @@
 <script lang="ts">
+    import { enhance } from '$app/forms';
+    import { invalidateAll } from '$app/navigation';
     import CentroidAction from '$lib/components/CentroidAction.svelte';
     import ConnectorSuggestions from '$lib/components/ConnectorSuggestions.svelte';
     import DatasetAssessment from '$lib/components/DatasetAssessment.svelte';
     import DatasetView from '$lib/components/DatasetView.svelte';
     import FramingCoverageTable from '$lib/components/FramingCoverageTable.svelte';
+    import MainPanel from '$lib/components/MainPanel.svelte';
     import PoseCoverageTable from '$lib/components/PoseCoverageTable.svelte';
+    import PruneSuggestions from '$lib/components/PruneSuggestions.svelte';
     import {
         FRAMING_BUCKETS,
         type FramingBand,
@@ -14,6 +18,14 @@
     import type { ActionData, PageData } from './$types';
 
     let { data, form }: { data: PageData; form: ActionData } = $props();
+
+    // Mirror max_size for the input. Initialized + re-synced via the
+    // $effect so we never capture a stale initial `data` value.
+    let maxSizeInput = $state('');
+    let savingMaxSize = $state(false);
+    $effect(() => {
+        maxSizeInput = data.max_size != null ? String(data.max_size) : '';
+    });
 
     /** Sum every dataset's per-bucket counts into a single group-level
      * coverage. Done client-side since we already have the per-dataset
@@ -100,12 +112,8 @@
     <title>{data.group.name} — Group — GridLoraTester</title>
 </svelte:head>
 
-<!-- Two-zone layout: the top block (title, actions, summary) stays fixed at
-     the top of the panel; only the dataset grids below scroll. `h-full`
-     pegs us to the <main> from +layout.svelte (which is the flex child of
-     the sidebar split), then we split it into shrink-0 + flex-1. -->
-<div class="flex h-full flex-col">
-    <div class="shrink-0 bg-bg-0">
+<MainPanel>
+    {#snippet header()}
         <div class="space-y-4 px-6 pt-6">
             <header>
                 <a href="/datasets" class="text-xs text-fg-muted hover:text-fg">← Datasets</a>
@@ -126,11 +134,50 @@
                 </p>
             </header>
 
-            <CentroidAction
-                label="Calculate centroids (per dataset + global)"
-                centroid={data.global_centroid}
-                error={form?.error ?? null}
-            />
+            <div class="flex flex-wrap items-start gap-6">
+                <CentroidAction
+                    label="Analyze group"
+                    centroid={data.global_centroid}
+                    error={form?.error ?? null}
+                />
+                <form
+                    method="POST"
+                    action="?/setMaxSize"
+                    use:enhance={() => {
+                        savingMaxSize = true;
+                        return async ({ update }) => {
+                            await update({ reset: false });
+                            savingMaxSize = false;
+                            await invalidateAll();
+                        };
+                    }}
+                    class="flex items-center gap-2 text-xs text-fg-muted"
+                    title="Caps the number of active images in this group. When set, prune suggestions appear once the buckets fill up so you can keep the best ones."
+                >
+                    <label for="max-size-input" class="whitespace-nowrap">Max group size</label>
+                    <input
+                        id="max-size-input"
+                        name="max_size"
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="—"
+                        bind:value={maxSizeInput}
+                        class="input w-24 px-2 py-1 text-xs"
+                    />
+                    <span class="tabular-nums text-fg-faint">
+                        {data.prune.n_active}
+                        {#if data.max_size != null}/ {data.max_size}{/if}
+                    </span>
+                    <button
+                        type="submit"
+                        class="btn btn-secondary px-2 py-1 text-xs"
+                        disabled={savingMaxSize}
+                    >
+                        {savingMaxSize ? '…' : 'Save'}
+                    </button>
+                </form>
+            </div>
         </div>
 
         <!-- Real tab strip with underline indicator, on its own row. The
@@ -221,10 +268,9 @@
                 </div>
             {/if}
         </div>
-    </div>
+    {/snippet}
 
-    <!-- Scrolling region: only this part moves under the fixed header. -->
-    <div class="flex-1 space-y-6 overflow-y-auto p-6">
+    <div class="space-y-6">
     {#if tab === 'images'}
         {#each data.datasets as ds (ds.slug)}
             {@const effectiveMedian =
@@ -300,6 +346,12 @@
                 <h3 class="text-xs uppercase tracking-wide text-fg-muted">Framing</h3>
                 <FramingCoverageTable coverage={globalFraming} />
             </div>
+            <PruneSuggestions
+                prune={data.prune}
+                excluded={data.excluded}
+                excludeAction="?/exclude"
+                restoreAction="?/restore"
+            />
             <ConnectorSuggestions
                 suggestions={data.group_suggestions}
                 scope_kind="group"
@@ -355,4 +407,4 @@
         </section>
     {/if}
     </div>
-</div>
+</MainPanel>

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
-    import GridResult from '$lib/components/GridResult.svelte';
+    import MainPanel from '$lib/components/MainPanel.svelte';
     import type { ActionData, PageData } from './$types';
 
     let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -10,53 +10,24 @@
     let editingId = $state<number | null>(null);
     let saving = $state(false);
     let deletingId = $state<number | null>(null);
+    let runningId = $state<number | null>(null);
+
+    // Live refresh while any test has an active grid-test-run job. Polls
+    // every 2s — invalidateAll re-runs the page load, which re-reads the
+    // job's progress + the test_runs cells count. Stops as soon as no
+    // test is active anymore (server returns active_job=null).
+    let anyActive = $derived(data.tests.some((t) => t.active_job != null));
+    $effect(() => {
+        if (!anyActive) return;
+        const id = setInterval(() => invalidateAll(), 2000);
+        return () => clearInterval(id);
+    });
     let showAdvanced = $state(false);
-    // Active tab in the details panel. New tests skip straight to settings
-    // (no result to show yet); existing tests with output default to the grid.
-    let activeTab = $state<'grid' | 'settings'>('settings');
 
     /** The "open in details panel" row from `data.tests` (or null when creating). */
     let openedTest = $derived(
         editingId != null && editingId > 0 ? data.tests.find((t) => t.id === editingId) ?? null : null
     );
-    let hasResult = $derived(openedTest != null && openedTest.status !== 'not_started');
-
-    // Manifest fetched lazily when a test with output is opened. Kept in
-    // component state so flipping back to the Settings tab and back again
-    // doesn't re-fetch. The $effect tears it down whenever the opened test
-    // changes (or no test is selected).
-    let manifest = $state<unknown | null>(null);
-    let manifestLoading = $state(false);
-    let manifestError = $state<string | null>(null);
-
-    $effect(() => {
-        const name = openedTest?.name;
-        if (!name || !hasResult) {
-            manifest = null;
-            manifestError = null;
-            return;
-        }
-        manifestLoading = true;
-        manifestError = null;
-        const ac = new AbortController();
-        fetch(`/tests/output/${encodeURIComponent(name)}/manifest.json`, { signal: ac.signal })
-            .then((r) => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                return r.json();
-            })
-            .then((j) => {
-                manifest = j;
-            })
-            .catch((e) => {
-                if (e?.name === 'AbortError') return;
-                manifestError = (e as Error).message;
-                manifest = null;
-            })
-            .finally(() => {
-                manifestLoading = false;
-            });
-        return () => ac.abort();
-    });
 
     // Editable fields (kept in sync with editor state).
     let f = $state({
@@ -65,11 +36,11 @@
         dataset_value: '', // encoded "dataset:<path>" or "group:<id>"
         prompt_set_id: '', // stringified id or '' (matches <select> value)
         prompts_path: '', // legacy: free-text path, passed through hidden field
-        width: 1024,
-        height: 1024,
+        trigger: '',
+        resolution: '1MP',
         batch_size: 0,
-        quant: 'fp8_weight_only',
-        offload: 'text-encoder',
+        quant: 'auto',
+        compile_mode: 'on' as 'on' | 'auto' | 'off',
         // advanced
         seed: 42,
         steps: 4,
@@ -77,11 +48,10 @@
         lora_scale: 1.0,
         format: 'png',
         sage_attention: false,
-        compile_transformer: false,
         preload_loras: false,
-        comfyui_noise: false,
         shift: '',
         min_step: 0,
+        qwen_dtype: 'bf16',
         skip_face: false,
         force: false
     });
@@ -93,22 +63,21 @@
             dataset_value: '',
             prompt_set_id: '',
             prompts_path: '',
-            width: 1024,
-            height: 1024,
+            trigger: '',
+            resolution: '1MP',
             batch_size: 0,
-            quant: 'fp8_weight_only',
-            offload: 'text-encoder',
+            quant: 'auto',
+        compile_mode: 'on' as 'on' | 'auto' | 'off',
             seed: 42,
             steps: 4,
             guidance: 1.0,
             lora_scale: 1.0,
             format: 'png',
             sage_attention: false,
-            compile_transformer: false,
             preload_loras: false,
-            comfyui_noise: false,
             shift: '',
             min_step: 0,
+            qwen_dtype: 'bf16',
             skip_face: false,
             force: false
         };
@@ -118,7 +87,6 @@
         reset();
         editingId = -1;
         showAdvanced = false;
-        activeTab = 'settings'; // nothing to show on the grid tab for a brand-new test
     }
 
     function openEdit(t: PageData['tests'][number]) {
@@ -134,29 +102,26 @@
                       : '',
             prompt_set_id: t.prompt_set_id != null ? String(t.prompt_set_id) : '',
             prompts_path: t.prompts_path ?? '',
-            width: t.width,
-            height: t.height,
+            trigger: t.trigger ?? '',
+            resolution: t.resolution ?? '1024x1024',
             batch_size: t.batch_size,
             quant: t.quant,
-            offload: t.offload,
+            compile_mode: t.compile_mode,
             seed: Number(adv.seed ?? 42),
             steps: Number(adv.steps ?? 4),
             guidance: Number(adv.guidance ?? 1.0),
             lora_scale: Number(adv.lora_scale ?? 1.0),
             format: String(adv.format ?? 'png'),
             sage_attention: Boolean(adv.sage_attention),
-            compile_transformer: Boolean(adv.compile_transformer),
             preload_loras: Boolean(adv.preload_loras),
-            comfyui_noise: Boolean(adv.comfyui_noise),
             shift: adv.shift != null ? String(adv.shift) : '',
             min_step: Number(adv.min_step ?? 0),
+            qwen_dtype: String(adv.qwen_dtype ?? 'bf16'),
             skip_face: Boolean(adv.skip_face),
             force: Boolean(adv.force)
         };
         editingId = t.id;
         showAdvanced = false;
-        // Default to the grid tab if there's actually something to look at.
-        activeTab = t.status === 'not_started' ? 'settings' : 'grid';
     }
 
     function closeEditor() {
@@ -179,6 +144,10 @@
         out_of_sync: {
             label: 'Out of sync',
             classes: 'bg-orange-500/15 text-orange-300'
+        },
+        failed: {
+            label: 'Failed',
+            classes: 'bg-red-500/15 text-red-300'
         }
     };
 
@@ -194,18 +163,17 @@
     <title>Tests — GridLoraTester</title>
 </svelte:head>
 
-<div class="mx-auto max-w-7xl space-y-6 p-8">
+<MainPanel>
+    <div class="space-y-6">
     <header class="flex items-baseline justify-between gap-4">
         <div>
             <h1 class="text-2xl font-semibold tracking-tight">Tests</h1>
             <p class="mt-1 text-sm text-fg-muted">
-                Saved grid recipes. Status is read live from <span class="font-mono text-fg"
-                    >{data.tests_root || 'tests_root'}</span
-                >.
+                Saved grid recipes — pick a LoRA family, a dataset, and a prompt set, then run.
             </p>
         </div>
         <div class="flex items-center gap-2">
-            <a href="/settings" class="btn-ghost text-xs">Configure roots…</a>
+            <a href="/settings" class="btn-ghost text-xs">Settings…</a>
             <button
                 type="button"
                 class="btn-primary"
@@ -244,9 +212,16 @@
                         {@const s = STATUS_LABELS[t.status]}
                         <tr class="transition-colors hover:bg-bg-2/40">
                             <td class="px-4 py-2.5 align-top">
-                                <div class="font-medium">{t.name}</div>
+                                <a
+                                    href={`/tests/${t.id}`}
+                                    class="font-medium text-fg hover:text-accent"
+                                    title="Open live grid view">{t.name}</a
+                                >
                                 <div class="text-xs text-fg-faint">
-                                    {t.width}×{t.height} · batch {t.batch_size || 'auto'}
+                                    {t.resolution || '—'} · batch {t.batch_size || 'auto'}
+                                    {#if t.trigger}
+                                        · trigger <span class="font-mono">{t.trigger}</span>
+                                    {/if}
                                 </div>
                             </td>
                             <td
@@ -272,17 +247,54 @@
                                     : ''}
                             </td>
                             <td class="px-4 py-2.5 align-top">
-                                <span
-                                    class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {s.classes}"
-                                    title={t.status === 'out_of_sync'
-                                        ? `${t.new_loras_count} new LoRA file(s) since last run`
-                                        : ''}
-                                >
-                                    {s.label}
-                                    {#if t.status === 'out_of_sync'}
-                                        <span class="ml-1">·+{t.new_loras_count}</span>
+                                <div class="flex flex-col items-start gap-1">
+                                    <span
+                                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {s.classes}"
+                                        title={t.status === 'out_of_sync'
+                                            ? `${t.new_loras_count} new LoRA file(s) since last run`
+                                            : ''}
+                                    >
+                                        {s.label}
+                                        {#if t.status === 'out_of_sync'}
+                                            <span class="ml-1">·+{t.new_loras_count}</span>
+                                        {/if}
+                                        {#if t.active_job && t.active_job.status === 'queued'}
+                                            <span class="ml-1 text-fg-faint">· queued</span>
+                                        {/if}
+                                    </span>
+                                    {#if t.active_job}
+                                        {@const aj = t.active_job}
+                                        {@const pct =
+                                            aj.progress_total && aj.progress_total > 0
+                                                ? Math.round(
+                                                      (aj.progress_current / aj.progress_total) *
+                                                          100
+                                                  )
+                                                : null}
+                                        <a
+                                            href={`/jobs?focus=${aj.id}`}
+                                            class="text-[10px] text-accent hover:text-accent-hover"
+                                            title="Open job logs"
+                                        >
+                                            job #{aj.id}
+                                            {#if pct != null}
+                                                · {aj.progress_current}/{aj.progress_total} ({pct}%)
+                                            {:else if aj.current_label}
+                                                · {aj.current_label}
+                                            {:else}
+                                                · starting…
+                                            {/if}
+                                        </a>
+                                        {#if pct != null}
+                                            <div class="h-1 w-32 overflow-hidden rounded bg-bg-3">
+                                                <div
+                                                    class="h-full bg-accent transition-all"
+                                                    style="width: {pct}%"
+                                                ></div>
+                                            </div>
+                                        {/if}
                                     {/if}
-                                </span>
+                                </div>
                             </td>
                             <td
                                 class="px-4 py-2.5 text-right align-top tabular-nums {scoreClass(
@@ -295,6 +307,53 @@
                             </td>
                             <td class="px-4 py-2.5 align-top">
                                 <div class="flex justify-end gap-1">
+                                    <form
+                                        method="POST"
+                                        action="?/run"
+                                        use:enhance={() => {
+                                            runningId = t.id;
+                                            return ({ update }) => {
+                                                update({ reset: false }).finally(
+                                                    () => (runningId = null)
+                                                );
+                                            };
+                                        }}
+                                    >
+                                        <input type="hidden" name="id" value={t.id} />
+                                        <button
+                                            type="submit"
+                                            class="btn-ghost px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200 disabled:opacity-50"
+                                            disabled={runningId === t.id || t.status === 'in_progress'}
+                                            title={t.status === 'in_progress'
+                                                ? 'A run is already in progress for this test'
+                                                : 'Queue a grid run as a background job'}
+                                        >
+                                            {runningId === t.id ? 'Queuing…' : '▶ Run'}
+                                        </button>
+                                    </form>
+                                    {#if t.status === 'in_progress' && t.active_job == null}
+                                        <!-- Stuck row: status says running but no
+                                             queued/active job backs it. The PID reaper
+                                             handles this automatically (10s cadence on
+                                             dead pids, restart-time sweep), but expose
+                                             a manual button for impatient users. -->
+                                        <form
+                                            method="POST"
+                                            action="?/reconcile-runs"
+                                            use:enhance={() => {
+                                                return ({ update }) => update();
+                                            }}
+                                        >
+                                            <input type="hidden" name="id" value={t.id} />
+                                            <button
+                                                type="submit"
+                                                class="btn-ghost px-2 py-1 text-xs text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+                                                title="Mark the stuck 'running' test_run as failed (PID is gone)"
+                                            >
+                                                ⚠ Reconcile
+                                            </button>
+                                        </form>
+                                    {/if}
                                     <button
                                         type="button"
                                         class="btn-ghost px-2 py-1 text-xs"
@@ -337,7 +396,7 @@
         </table>
     </div>
 
-    <!-- =================== DETAILS (tabs) =================== -->
+    <!-- =================== DETAILS =================== -->
     {#if editingId !== null}
         <section class="card">
             <div class="mb-4 flex items-center justify-between gap-4">
@@ -348,61 +407,9 @@
                           ? openedTest.name
                           : 'Edit test'}
                 </h3>
-                {#if editingId !== -1}
-                    <div
-                        class="inline-flex rounded-md border border-border bg-bg-2 p-0.5 text-xs"
-                        role="tablist"
-                    >
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={activeTab === 'grid'}
-                            disabled={!hasResult}
-                            class="rounded px-2.5 py-1 transition-colors {activeTab === 'grid'
-                                ? 'bg-bg-0 text-fg'
-                                : 'text-fg-muted hover:text-fg'} disabled:cursor-not-allowed disabled:opacity-50"
-                            onclick={() => (activeTab = 'grid')}
-                            title={hasResult ? '' : 'Test has not been run yet'}
-                        >
-                            Result / Grid
-                        </button>
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={activeTab === 'settings'}
-                            class="rounded px-2.5 py-1 transition-colors {activeTab === 'settings'
-                                ? 'bg-bg-0 text-fg'
-                                : 'text-fg-muted hover:text-fg'}"
-                            onclick={() => (activeTab = 'settings')}
-                        >
-                            Settings
-                        </button>
-                    </div>
-                {/if}
             </div>
 
-            {#if editingId !== -1 && activeTab === 'grid'}
-                <!-- ------------ RESULT / GRID ------------ -->
-                {#if !hasResult}
-                    <div class="card text-sm text-fg-muted">
-                        Test hasn't been run yet — nothing to show. Edit settings and run it
-                        from the CLI for now (`python -m glt ...`); the dashboard runner is
-                        coming in the next pass.
-                    </div>
-                {:else if manifestLoading}
-                    <div class="text-sm text-fg-muted">Loading manifest…</div>
-                {:else if manifestError}
-                    <div class="card text-sm text-red-300">
-                        Failed to load manifest: <code class="font-mono">{manifestError}</code>
-                    </div>
-                {:else if manifest && openedTest}
-                    <GridResult testName={openedTest.name} manifest={manifest as never} />
-                {:else}
-                    <div class="text-sm text-fg-muted">No manifest data.</div>
-                {/if}
-            {:else}
-                <!-- ------------ SETTINGS (form) ------------ -->
-                <form
+            <form
                 method="POST"
                 action={editingId === -1 ? '?/create' : '?/update'}
                 use:enhance={() => {
@@ -517,7 +524,14 @@
                         >
                             <option value="">— (none)</option>
                             {#each data.prompt_sets as p (p.id)}
-                                <option value={p.id}>{p.name} · {p.prompt_count} prompts</option>
+                                <!-- value must be a string because f.prompt_set_id is
+                                     a string ('' or stringified id) — Svelte 5 uses
+                                     strict equality to match select↔option. Passing
+                                     the bare numeric id leaves the select stuck on
+                                     "— (none)" when editing an existing test. -->
+                                <option value={String(p.id)}>
+                                    {p.name} · {p.prompt_count} prompts
+                                </option>
                             {/each}
                         </select>
                         {#if data.prompt_sets.length === 0}
@@ -532,31 +546,43 @@
                     </div>
                 </div>
 
-                <!-- Row 3: resolution / batch -->
-                <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
+                <!-- Row 3: trigger / resolution / batch -->
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div class="space-y-1.5">
-                        <label for="t-w" class="text-sm font-medium">Width</label>
+                        <label for="t-trigger" class="text-sm font-medium">Trigger word</label>
                         <input
-                            id="t-w"
-                            name="width"
-                            type="number"
-                            min="64"
-                            step="8"
+                            id="t-trigger"
+                            name="trigger"
+                            type="text"
+                            placeholder="e.g. m4nd1234"
                             class="input"
-                            bind:value={f.width}
+                            bind:value={f.trigger}
                         />
+                        <p class="text-xs text-fg-faint">
+                            Substituted into <span class="font-mono">[trigger]</span> by the
+                            grid script. Leave empty to keep placeholders.
+                        </p>
                     </div>
                     <div class="space-y-1.5">
-                        <label for="t-h" class="text-sm font-medium">Height</label>
-                        <input
-                            id="t-h"
-                            name="height"
-                            type="number"
-                            min="64"
-                            step="8"
+                        <label for="t-resolution" class="text-sm font-medium">Resolution</label>
+                        <select
+                            id="t-resolution"
+                            name="resolution"
                             class="input"
-                            bind:value={f.height}
-                        />
+                            bind:value={f.resolution}
+                        >
+                            <option value="0.5MP">0.5 MP (~724²)</option>
+                            <option value="1MP">1 MP (1024²)</option>
+                            <option value="1.5MP">1.5 MP (~1254²)</option>
+                            <option value="2MP">2 MP (~1448²)</option>
+                            <option value="3MP">3 MP (~1773²)</option>
+                            <option value="4MP">4 MP (~2048²)</option>
+                        </select>
+                        <p class="text-xs text-fg-faint">
+                            Target image area. The grid script derives W×H per cell
+                            from this + the per-prompt AR tag
+                            (<span class="font-mono">[3:4]</span>, <span class="font-mono">[16:9]</span>…).
+                        </p>
                     </div>
                     <div class="space-y-1.5">
                         <label for="t-batch" class="text-sm font-medium">Batch size</label>
@@ -571,13 +597,9 @@
                         />
                         <p class="text-xs text-fg-faint">0 = all missing in one go.</p>
                     </div>
-                    <div class="space-y-1.5">
-                        <span class="text-sm font-medium">&nbsp;</span>
-                        <!-- spacer to keep grid aligned -->
-                    </div>
                 </div>
 
-                <!-- Row 4: quant / offload -->
+                <!-- Row 4: quant + compile -->
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div class="space-y-1.5">
                         <label for="t-quant" class="text-sm font-medium">Quantization</label>
@@ -587,28 +609,39 @@
                             class="input"
                             bind:value={f.quant}
                         >
-                            <option value="fp8_weight_only"
-                                >FP8 weight-only (recommended, ~9 GB)</option
+                            <option value="auto">Auto (pick by GPU — recommended)</option>
+                            <option value="int8_convrot"
+                                >INT8 ConvRot (Ampere best, ~2× vs FP8 weight)</option
                             >
-                            <option value="fp8_dynamic">FP8 dynamic (Hopper/Ada FP8 cores)</option
+                            <option value="fp8_weight"
+                                >FP8 weight-only (Ada/Hopper native, ~9 GB)</option
                             >
-                            <option value="bf16">bf16 (no quant, ~22 GB)</option>
+                            <option value="fp8_dynamic">FP8 dynamic (Ada/Hopper FP8 cores)</option>
+                            <option value="fp8_quanto">FP8 quanto (legacy, needs CUDA toolkit)</option>
+                            <option value="none">bf16 (no quant, ~22 GB)</option>
                         </select>
                     </div>
                     <div class="space-y-1.5">
-                        <label for="t-offload" class="text-sm font-medium">Offload</label>
+                        <label for="t-compile" class="text-sm font-medium">torch.compile</label>
                         <select
-                            id="t-offload"
-                            name="offload"
+                            id="t-compile"
+                            name="compile_mode"
                             class="input"
-                            bind:value={f.offload}
+                            bind:value={f.compile_mode}
                         >
-                            <option value="text-encoder">Text encoder only (24 GB)</option>
-                            <option value="full">Full (small VRAM, slower)</option>
-                            <option value="none">None (kept on GPU, fastest)</option>
+                            <option value="on">On (default — ~2× faster, persistent disk cache)</option>
+                            <option value="auto"
+                                >Auto (enable when n_loras × n_prompts ≥ n_shapes × 8)</option
+                            >
+                            <option value="off">Off (skip compile — useful for one-off tests)</option>
                         </select>
                     </div>
                 </div>
+                <p class="text-xs text-fg-faint">
+                    Qwen3 and the transformer are never co-resident — Qwen is loaded for the
+                    encode pass only, then unloaded before the transformer loads. Compile
+                    artifacts persist in <code>~/.cache/glt/torchinductor/</code> across runs.
+                </p>
 
                 <!-- Advanced -->
                 <details class="rounded-md border border-border bg-bg-2/40" bind:open={showAdvanced}>
@@ -694,7 +727,24 @@
                             </select>
                         </div>
                         <div class="space-y-1.5">
-                            <span class="text-xs font-medium">&nbsp;</span>
+                            <label for="a-qwen-dtype" class="text-xs font-medium">
+                                Qwen dtype
+                            </label>
+                            <select
+                                id="a-qwen-dtype"
+                                name="advanced.qwen_dtype"
+                                class="input"
+                                bind:value={f.qwen_dtype}
+                            >
+                                <option value="bf16">bf16 (~16 GB, default)</option>
+                                <option value="fp16">fp16 (~16 GB)</option>
+                                <option value="fp8_e4m3fn">fp8_e4m3fn (~8 GB, for ≤16 GB cards)</option>
+                                <option value="fp8_e5m2">fp8_e5m2 (~8 GB)</option>
+                            </select>
+                            <p class="text-[10px] text-fg-faint">
+                                Qwen is unloaded after encode — dtype only matters during the
+                                brief encode pass. Drop to fp8 if you only have 16 GB of VRAM.
+                            </p>
                         </div>
 
                         <label class="col-span-2 flex items-center gap-2 text-xs">
@@ -706,15 +756,10 @@
                             />
                             <span>SageAttention</span>
                         </label>
-                        <label class="col-span-2 flex items-center gap-2 text-xs">
-                            <input
-                                name="advanced.compile_transformer"
-                                type="checkbox"
-                                bind:checked={f.compile_transformer}
-                                class="h-4 w-4 rounded border-border bg-bg-1 text-accent"
-                            />
-                            <span>torch.compile transformer</span>
-                        </label>
+                        <!-- torch.compile moved to the main form (next to
+                             Quantization). It's a top-level performance knob,
+                             not an advanced experiment, and it's on by default
+                             with the disk cache. -->
                         <label class="col-span-2 flex items-center gap-2 text-xs">
                             <input
                                 name="advanced.preload_loras"
@@ -724,15 +769,14 @@
                             />
                             <span>Preload all LoRAs as named adapters</span>
                         </label>
-                        <label class="col-span-2 flex items-center gap-2 text-xs">
-                            <input
-                                name="advanced.comfyui_noise"
-                                type="checkbox"
-                                bind:checked={f.comfyui_noise}
-                                class="h-4 w-4 rounded border-border bg-bg-1 text-accent"
-                            />
-                            <span>ComfyUI noise (bit-exact parity)</span>
-                        </label>
+                        <!-- ComfyUI noise: forced-on for bit-exact parity, no toggle.
+                             Hidden field ensures every create/update writes
+                             advanced.comfyui_noise = true. -->
+                        <input
+                            type="hidden"
+                            name="advanced.comfyui_noise"
+                            value="on"
+                        />
                         <label class="col-span-2 flex items-center gap-2 text-xs">
                             <input
                                 name="advanced.skip_face"
@@ -772,7 +816,7 @@
                     </button>
                 </div>
             </form>
-            {/if}
         </section>
     {/if}
-</div>
+    </div>
+</MainPanel>

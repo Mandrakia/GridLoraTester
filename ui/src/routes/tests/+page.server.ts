@@ -3,6 +3,7 @@ import { fail } from '@sveltejs/kit';
 
 import { listDatasets } from '$lib/server/datasets';
 import { listDatasetGroups } from '$lib/server/dataset-groups';
+import { enqueue } from '$lib/server/jobs';
 import { listLoraFamilies } from '$lib/server/loras';
 import { listPromptSets } from '$lib/server/prompts';
 import { getSettings } from '$lib/server/settings';
@@ -14,6 +15,7 @@ import {
     type DatasetSelector,
     type TestInput
 } from '$lib/server/tests';
+import { finalizeStaleRunsForTest } from '$lib/server/test-runs';
 
 export const load: PageServerLoad = () => {
     const settings = getSettings();
@@ -80,13 +82,22 @@ function readInput(data: FormData): TestInput {
         dataset: readDatasetSelector(data),
         prompts_path: String(data.get('prompts_path') ?? '').trim() || null,
         prompt_set_id: psId && psId > 0 ? psId : null,
-        width: Math.max(64, readNumber(data, 'width', 1024)),
-        height: Math.max(64, readNumber(data, 'height', 1024)),
+        trigger: String(data.get('trigger') ?? '').trim(),
+        resolution: String(data.get('resolution') ?? '').trim() || '1MP',
         batch_size: Math.max(0, readNumber(data, 'batch_size', 0)),
-        quant: String(data.get('quant') ?? 'fp8_weight_only'),
-        offload: String(data.get('offload') ?? 'text-encoder'),
+        quant: String(data.get('quant') ?? 'auto'),
+        compile_mode: parseCompileMode(data.get('compile_mode')),
         advanced: readAdvanced(data)
     };
+}
+
+function parseCompileMode(raw: FormDataEntryValue | null): 'on' | 'auto' | 'off' {
+    const v = String(raw ?? '').trim().toLowerCase();
+    if (v === 'auto') return 'auto';
+    if (v === 'off' || v === 'false' || v === '0') return 'off';
+    // Default for blank / unknown values matches the schema default:
+    // compile pays for itself from ~3 images (warm cache), so on-by-default.
+    return 'on';
 }
 
 export const actions: Actions = {
@@ -124,5 +135,46 @@ export const actions: Actions = {
         if (!Number.isFinite(id) || id <= 0) return fail(400, { error: 'Bad id' });
         deleteTest(id);
         return { ok: true };
+    },
+
+    /** Spawn `python -m glt --grid --test-id N` as a background job.
+     * Sequential per type — multiple Run clicks queue rather than racing
+     * for the GPU. */
+    run: async ({ request }) => {
+        const data = await request.formData();
+        const id = Number(data.get('id'));
+        if (!Number.isFinite(id) || id <= 0) return fail(400, { error: 'Bad id' });
+        const settings = getSettings();
+        if (!settings.python_bin || !settings.tests_root) {
+            return fail(400, {
+                error:
+                    'Settings incomplete: set python_bin and tests_root in /settings before running tests.'
+            });
+        }
+        try {
+            const job_id = enqueue(
+                'grid-test-run',
+                { test_id: id },
+                { key_arg1: String(id) }
+            );
+            return { ok: true, job_id };
+        } catch (e) {
+            return fail(500, { error: (e as Error).message });
+        }
+    },
+
+    /** Force-finalize any stuck 'running' test_run for this test. Used
+     * when the dashboard knows the job is gone (orphan-reaped or just
+     * stale) but the test_runs row never got flipped. Manual escape
+     * hatch in addition to the automatic reaper. */
+    'reconcile-runs': async ({ request }) => {
+        const data = await request.formData();
+        const id = Number(data.get('id'));
+        if (!Number.isFinite(id) || id <= 0) return fail(400, { error: 'Bad id' });
+        const n = finalizeStaleRunsForTest(
+            id, 'failed',
+            'Manually reconciled by user (was stuck in running)',
+        );
+        return { ok: true, reconciled: n };
     }
 };

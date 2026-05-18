@@ -22,7 +22,7 @@ const STEP_RE = /^(.*?)_(\d+)$/;
  *   "my-lora_000001400.safetensors" → 1400
  *   "final.safetensors"             → null  (treated as "final")
  */
-function parseStep(filename: string): number | null {
+export function parseStep(filename: string): number | null {
     // Strip the .safetensors extension before matching.
     const stem = filename.replace(/\.safetensors$/, '');
     const m = STEP_RE.exec(stem);

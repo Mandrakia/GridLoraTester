@@ -17,7 +17,7 @@ env/
 .idea/
 *.swp
 *~
-
+CLAUDE.md
 # Local caches
 .pytest_cache/
 .ruff_cache/

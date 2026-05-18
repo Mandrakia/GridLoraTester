@@ -8,6 +8,7 @@ import { countByFraming, type FramingCoverage, type FramingSample } from '../fra
 import { countByBucket, type PoseCoverage } from '../pose-grid';
 import { decodeEmbedding, dot } from './centroid-math';
 import { db } from './db';
+import type { DatasetImageStatus } from './dataset-images';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp']);
 
@@ -16,6 +17,10 @@ export interface DatasetItem {
     filename: string;
     /** Caption from the sidecar `.txt` / `.caption`, or `''`. */
     caption: string;
+    /** Active vs excluded. Drives the grid badge — excluded items are still
+     * shown (so the user can restore them) but greyed out. `null` when the
+     * image has no dataset_images row yet (not analyzed). */
+    status: DatasetImageStatus | null;
     /** Cos-sim of the winning face vs the folder's centroid, or `null` when
      * no centroid has been computed yet OR no face was detected. */
     similarity: number | null;
@@ -61,25 +66,29 @@ function readCaption(folder: string, imageName: string): string {
     return '';
 }
 
-// Per-image face stats loaded in one shot per folder. We pick the winning
-// face (is_target=1) for the similarity; face_count is a COUNT(*) of detected
-// faces regardless of target. We also surface the winner's embedding (base64)
-// so a group page can score it against a second centroid without a re-query.
-// All NULL when the image isn't in face_embeddings (no centroid run yet).
+// Per-image face stats loaded in one shot per folder. Driven from the
+// canonical dataset_images table so we get status + dim metadata in the
+// same row, then LEFT JOIN face_embeddings for the per-face aggregates
+// (winning face = is_target=1). All face-side fields are NULL when no
+// detection has run yet OR no face was detected — listDatasetItems still
+// surfaces the image with status='active' so the UI grid shows it.
 const imageStatsStmt = db.prepare(`
-    SELECT image_path,
-           COUNT(*) AS face_count,
-           MAX(CASE WHEN is_target = 1 THEN similarity END)    AS target_similarity,
-           MAX(CASE WHEN is_target = 1 THEN embedding_b64 END) AS target_embedding_b64,
-           MAX(CASE WHEN is_target = 1 THEN yaw END)           AS target_yaw,
-           MAX(CASE WHEN is_target = 1 THEN pitch END)         AS target_pitch
-    FROM face_embeddings
-    WHERE image_path LIKE ? ESCAPE '\\'
-    GROUP BY image_path
+    SELECT di.image_path,
+           di.status,
+           COUNT(fe.id) AS face_count,
+           MAX(CASE WHEN fe.is_target = 1 THEN fe.similarity END)    AS target_similarity,
+           MAX(CASE WHEN fe.is_target = 1 THEN fe.embedding_b64 END) AS target_embedding_b64,
+           MAX(CASE WHEN fe.is_target = 1 THEN fe.yaw END)           AS target_yaw,
+           MAX(CASE WHEN fe.is_target = 1 THEN fe.pitch END)         AS target_pitch
+      FROM dataset_images di
+      LEFT JOIN face_embeddings fe ON fe.image_path = di.image_path
+     WHERE di.folder_path = ?
+     GROUP BY di.image_path
 `);
 
 interface ImageStatsRow {
     image_path: string;
+    status: DatasetImageStatus;
     face_count: number;
     target_similarity: number | null;
     target_embedding_b64: string | null;
@@ -88,11 +97,7 @@ interface ImageStatsRow {
 }
 
 function loadImageStats(folderPath: string): Map<string, ImageStatsRow> {
-    // LIKE '/abs/path/%' picks every face row whose image lives directly in
-    // or below this folder. We escape the SQL wildcards in the folder path
-    // itself (rare but `_` does occur in dataset names).
-    const escaped = folderPath.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const rows = imageStatsStmt.all(escaped + '/%') as ImageStatsRow[];
+    const rows = imageStatsStmt.all(folderPath) as ImageStatsRow[];
     const map = new Map<string, ImageStatsRow>();
     for (const r of rows) map.set(r.image_path, r);
     return map;
@@ -133,6 +138,7 @@ export function listDatasetItems(
         items.push({
             filename: f,
             caption: readCaption(folderPath, f),
+            status: s?.status ?? null,
             similarity: s?.target_similarity ?? null,
             similarity_group: simGroup,
             face_count: s?.face_count ?? null,
@@ -159,14 +165,19 @@ export function readDatasetDetail(
 // Pull yaw/pitch for every winning face in this folder and bucket them into
 // the 15-cell pose grid (see lib/pose-grid.ts). Useful for dataset coverage
 // audit. NOT lazily evaluated — server-cheap: <= one row per image.
+// Excluded images are filtered out via the JOIN — their pose shouldn't
+// count toward coverage targets.
 const poseStmt = db.prepare(`
-    SELECT yaw, pitch FROM face_embeddings
-    WHERE image_path LIKE ? ESCAPE '\\' AND is_target = 1
+    SELECT fe.yaw, fe.pitch
+      FROM face_embeddings fe
+      JOIN dataset_images di ON di.image_path = fe.image_path
+     WHERE di.folder_path = ?
+       AND di.status = 'active'
+       AND fe.is_target = 1
 `);
 
 export function loadPoseCoverage(folderPath: string): PoseCoverage {
-    const escaped = folderPath.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const rows = poseStmt.all(escaped + '/%') as { yaw: number | null; pitch: number | null }[];
+    const rows = poseStmt.all(folderPath) as { yaw: number | null; pitch: number | null }[];
     return countByBucket(rows);
 }
 
@@ -185,8 +196,13 @@ import {
 } from '../pose-grid';
 
 const calibStmt = db.prepare(`
-    SELECT yaw, pitch, similarity FROM face_embeddings
-    WHERE image_path LIKE ? ESCAPE '\\' AND is_target = 1 AND similarity IS NOT NULL
+    SELECT fe.yaw, fe.pitch, fe.similarity
+      FROM face_embeddings fe
+      JOIN dataset_images di ON di.image_path = fe.image_path
+     WHERE di.folder_path = ?
+       AND di.status = 'active'
+       AND fe.is_target = 1
+       AND fe.similarity IS NOT NULL
 `);
 
 interface CalibRow {
@@ -232,8 +248,7 @@ function yawAbs(yaw: number): number {
 export function loadPoseCalibration(folderPaths: string[]): PoseCalibration {
     const rows: CalibRow[] = [];
     for (const p of folderPaths) {
-        const escaped = p.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-        rows.push(...(calibStmt.all(escaped + '/%') as CalibRow[]));
+        rows.push(...(calibStmt.all(p) as CalibRow[]));
     }
 
     // Buckets we care about for calibration.
@@ -305,15 +320,19 @@ export function loadPoseCalibration(folderPaths: string[]): PoseCalibration {
 
 // Framing distance proxy: bbox HEIGHT / image_height, optionally roll-
 // corrected. Thresholds + classifier live in framing-grid.ts; we just pull
-// the raw inputs here.
+// the raw inputs here. image_height lives on dataset_images now (image-level
+// property); join in to fetch it alongside the per-face bbox + roll.
 const framingStmt = db.prepare(`
-    SELECT bbox_json, image_height, roll FROM face_embeddings
-    WHERE image_path LIKE ? ESCAPE '\\' AND is_target = 1
+    SELECT fe.bbox_json, di.image_height, fe.roll
+      FROM face_embeddings fe
+      JOIN dataset_images di ON di.image_path = fe.image_path
+     WHERE di.folder_path = ?
+       AND di.status = 'active'
+       AND fe.is_target = 1
 `);
 
 export function loadFramingCoverage(folderPath: string): FramingCoverage {
-    const escaped = folderPath.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const rows = framingStmt.all(escaped + '/%') as {
+    const rows = framingStmt.all(folderPath) as {
         bbox_json: string | null;
         image_height: number | null;
         roll: number | null;

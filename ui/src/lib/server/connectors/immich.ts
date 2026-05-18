@@ -191,9 +191,12 @@ export class ImmichConnector implements PhotoConnector {
         if (!creds) throw new Error('Immich is not configured.');
         const limit = Math.min(Math.max(opts.limit ?? 250, 1), 1000);
         // Immich's search/metadata endpoint accepts a personIds filter and
-        // returns paginated metadata-rich results.
+        // returns paginated metadata-rich results. `type: 'IMAGE'` excludes
+        // videos at the source — OpenCV.imdecode can't parse .mp4 / .mov
+        // and would throw a confusing "Bad argument" error per video asset.
         const body = {
             personIds: [personId],
+            type: 'IMAGE',
             withExif: true,
             page: opts.cursor ? Number(opts.cursor) : 1,
             size: limit

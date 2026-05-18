@@ -13,6 +13,10 @@
     interface DatasetItem {
         filename: string;
         caption: string;
+        /** Active vs excluded vs no DB row yet (manual file not analyzed).
+         * Excluded items render greyscale + an "excluded" badge so the user
+         * sees them in the grid without confusing them for active members. */
+        status?: 'active' | 'excluded' | null;
         similarity: number | null;
         face_count: number | null;
         yaw: number | null;
@@ -98,8 +102,11 @@
             style="grid-template-columns: repeat({Math.max(1, cols)}, minmax(0, 1fr));"
         >
             {#each items as item (item.filename)}
+                {@const isExcluded = item.status === 'excluded'}
                 <figure
-                    class="overflow-hidden rounded-md border border-border bg-bg-1"
+                    class="overflow-hidden rounded-md border bg-bg-1 transition-opacity {isExcluded
+                        ? 'border-red-500/40 opacity-60 hover:opacity-100'
+                        : 'border-border'}"
                     style="content-visibility: auto; contain-intrinsic-size: 1px 320px;"
                 >
                     <button
@@ -118,8 +125,17 @@
                             alt={item.filename}
                             loading="lazy"
                             decoding="async"
-                            class="block h-full w-full object-cover"
+                            class="block h-full w-full object-cover {isExcluded ? 'grayscale' : ''}"
                         />
+
+                        {#if isExcluded}
+                            <span
+                                class="pointer-events-none absolute left-1 top-1 rounded bg-red-500/85 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm"
+                                title="Excluded from centroid + suggestions. Restore from the Stats tab."
+                            >
+                                excluded
+                            </span>
+                        {/if}
 
                         {#if item.face_count != null}
                             {#if item.similarity != null && medianSim != null}

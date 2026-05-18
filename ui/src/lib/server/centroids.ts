@@ -4,7 +4,13 @@
 // For a single folder: one 'folder' centroid is written. For a group of N
 // folders: N 'folder' centroids + one 'group' centroid (over the union of
 // every face from every member, with its own two-pass).
+//
+// Image-level metadata (phash, width, height, status) lives on
+// `dataset_images`. face_embeddings holds only the per-face vectors.
+// Writers must upsert dataset_images BEFORE inserting face rows so the FK
+// is satisfied; excluded images are filtered out of every read here.
 import { encodeEmbedding, twoPassCentroid, type PyImage } from './centroid-math';
+import { upsertManual } from './dataset-images';
 import { db } from './db';
 import { request as workerRequest } from './python-worker';
 
@@ -34,13 +40,11 @@ const deleteFacesByImageStmt = db.prepare('DELETE FROM face_embeddings WHERE ima
 const insertFaceStmt = db.prepare(`
     INSERT INTO face_embeddings(
         image_path, face_index, bbox_json, det_score, embedding_b64,
-        is_target, similarity, pitch, yaw, roll,
-        image_width, image_height
+        is_target, similarity, pitch, yaw, roll
     )
     VALUES(
         @image_path, @face_index, @bbox_json, @det_score, @embedding_b64,
-        @is_target, @similarity, @pitch, @yaw, @roll,
-        @image_width, @image_height
+        @is_target, @similarity, @pitch, @yaw, @roll
     )
     ON CONFLICT(image_path, face_index) DO UPDATE SET
         bbox_json = excluded.bbox_json,
@@ -51,8 +55,6 @@ const insertFaceStmt = db.prepare(`
         pitch = excluded.pitch,
         yaw = excluded.yaw,
         roll = excluded.roll,
-        image_width = excluded.image_width,
-        image_height = excluded.image_height,
         computed_at = datetime('now')
 `);
 const upsertCentroidStmt = db.prepare(`
@@ -91,11 +93,19 @@ export function getCentroid(scopeKind: 'folder' | 'group', scopeKey: string): Ce
 // Recompute a folder's centroid + per-row similarity/is_target from the
 // face_embeddings rows already in DB. Used after an import: we just added
 // new face rows, no need to re-detect anything.
+//
+// Joins on dataset_images so we can (a) filter status='active' (excluded
+// images don't contribute to the centroid), (b) read image-level dims +
+// phash from the canonical place, (c) use the folder_path index instead
+// of LIKE-scanning.
 const loadFolderFacesStmt = db.prepare(`
-    SELECT image_path, face_index, bbox_json, det_score, embedding_b64,
-           pitch, yaw, roll, image_width, image_height
-    FROM face_embeddings
-    WHERE image_path LIKE ? ESCAPE '\\'
+    SELECT fe.image_path, fe.face_index, fe.bbox_json, fe.det_score,
+           fe.embedding_b64, fe.pitch, fe.yaw, fe.roll,
+           di.image_width, di.image_height, di.phash
+      FROM face_embeddings fe
+      JOIN dataset_images di ON di.image_path = fe.image_path
+     WHERE di.folder_path = ?
+       AND di.status = 'active'
 `);
 const clearOneImageStmt = db.prepare('DELETE FROM face_embeddings WHERE image_path = ?');
 
@@ -110,23 +120,22 @@ interface DbFaceRow {
     roll: number | null;
     image_width: number | null;
     image_height: number | null;
+    phash: string | null;
 }
 
-function escapeForLike(s: string): string {
-    return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-}
-
-/** Read every face_embeddings row under `folderPath` and reshape into the
- * PyImage[] structure twoPassCentroid expects. Returns empty when nothing
- * lives under that folder. */
+/** Read every active face row under `folderPath` and reshape into the
+ * PyImage[] structure twoPassCentroid expects. Excluded images and their
+ * faces are skipped via the JOIN. Returns empty when nothing lives under
+ * that folder. */
 function loadImagesUnderFolder(folderPath: string): PyImage[] {
-    const rows = loadFolderFacesStmt.all(escapeForLike(folderPath) + '/%') as DbFaceRow[];
+    const rows = loadFolderFacesStmt.all(folderPath) as DbFaceRow[];
     if (rows.length === 0) return [];
 
     type ImgAcc = {
         image_path: string;
         image_width: number | null;
         image_height: number | null;
+        phash: string | null;
         faces: PyImage['faces'];
     };
     const byImage = new Map<string, ImgAcc>();
@@ -137,6 +146,7 @@ function loadImagesUnderFolder(folderPath: string): PyImage[] {
                 image_path: r.image_path,
                 image_width: r.image_width,
                 image_height: r.image_height,
+                phash: r.phash,
                 faces: []
             };
             byImage.set(r.image_path, img);
@@ -205,9 +215,7 @@ export function recomputeFolderCentroidFromDb(
                     similarity: isTarget && winnerSim != null ? winnerSim : null,
                     pitch: f.pitch ?? null,
                     yaw: f.yaw ?? null,
-                    roll: f.roll ?? null,
-                    image_width: img.image_width ?? null,
-                    image_height: img.image_height ?? null
+                    roll: f.roll ?? null
                 });
             }
         }
@@ -285,6 +293,20 @@ export async function computeAndPersist(
         const per_folder: Record<string, CentroidStats> = {};
 
         for (const ds of datasets) {
+            // Upsert dataset_images for every image the detector saw, BEFORE
+            // touching face rows (FK target must exist first). upsertManual
+            // preserves any pre-existing imported lineage and phash — Python
+            // doesn't return phash, so the COALESCE in the upsert keeps any
+            // hash that the import path or the compute-image-hashes job
+            // already wrote.
+            for (const img of ds.images) {
+                upsertManual({
+                    image_path: img.image_path,
+                    image_width: img.image_width ?? null,
+                    image_height: img.image_height ?? null
+                });
+            }
+
             // Refresh face rows for every image we touched (handles deletes
             // on disk cleanly: an image dropped between runs no longer appears
             // in the detector output, so its old row stays — call it a tombstone
@@ -319,9 +341,7 @@ export async function computeAndPersist(
                         similarity: isTarget && simForWinner != null ? simForWinner : null,
                         pitch: f.pitch ?? null,
                         yaw: f.yaw ?? null,
-                        roll: f.roll ?? null,
-                        image_width: img.image_width ?? null,
-                        image_height: img.image_height ?? null
+                        roll: f.roll ?? null
                     });
                     persisted_faces++;
                 }

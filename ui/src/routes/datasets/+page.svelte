@@ -2,6 +2,7 @@
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
     import ConnectorLinks from '$lib/components/ConnectorLinks.svelte';
+    import MainPanel from '$lib/components/MainPanel.svelte';
     import type { ActionData, PageData } from './$types';
 
     let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -42,15 +43,16 @@
     <title>Datasets — GridLoraTester</title>
 </svelte:head>
 
-<div class="mx-auto max-w-6xl space-y-8 p-8">
+<MainPanel>
+    <div class="space-y-8">
     <header class="flex items-baseline justify-between gap-4">
         <div>
             <h1 class="text-2xl font-semibold tracking-tight">Datasets</h1>
             <p class="mt-1 text-sm text-fg-muted">
-                Browse the dataset root and bundle folders into reusable groups.
+                Browse your dataset folders and bundle them into reusable groups.
             </p>
         </div>
-        <a href="/settings" class="btn-ghost">Configure roots…</a>
+        <a href="/settings" class="btn-ghost">Settings…</a>
     </header>
 
     <!-- ============================================================ -->
@@ -61,7 +63,7 @@
             <div>
                 <h2 class="text-base font-medium">Dataset groups</h2>
                 <p class="text-xs text-fg-faint">
-                    Named bundles of dataset folders, stored in <code class="font-mono">glt.db</code>.
+                    Named bundles of dataset folders — handy when you want to train on several at once.
                 </p>
             </div>
             <button
@@ -89,7 +91,7 @@
                         <tr>
                             <td colspan="4" class="px-4 py-6 text-center text-sm text-fg-faint">
                                 No groups yet. {data.datasets.length === 0
-                                    ? 'Add a dataset_root first.'
+                                    ? 'Set your dataset folder in Settings first.'
                                     : 'Click "New group" above to create one.'}
                             </td>
                         </tr>
@@ -222,15 +224,12 @@
                 <div class="space-y-1.5">
                     <span class="text-sm font-medium">Datasets</span>
                     <p class="text-xs text-fg-faint">
-                        Pick one or more subfolders of
-                        <span class="font-mono text-fg-muted">{data.dataset_root || 'dataset_root'}</span
-                        >.
+                        Pick one or more datasets to include in this group.
                     </p>
                     {#if data.datasets.length === 0}
                         <p class="text-xs text-amber-400">
-                            No datasets found — configure <a href="/settings" class="underline"
-                                >dataset_root</a
-                            > first.
+                            No datasets found — set your dataset folder in
+                            <a href="/settings" class="underline">Settings</a> first.
                         </p>
                     {:else}
                         <div
@@ -282,42 +281,46 @@
         <div class="mb-3">
             <h2 class="text-base font-medium">Available datasets</h2>
             <p class="text-xs text-fg-faint">
-                Live listing of <span class="font-mono text-fg-muted"
-                    >{data.dataset_root || 'dataset_root'}</span
-                > — not stored in the DB.
+                Each subfolder of your dataset folder shows up here.
             </p>
         </div>
 
         {#if !data.dataset_root}
             <div class="card text-sm text-fg-muted">
-                No <span class="font-mono text-fg">dataset_root</span> configured.
+                Dataset folder isn't set yet.
                 <a href="/settings" class="text-accent hover:text-accent-hover"
                     >Set it in Settings →</a
                 >
             </div>
         {:else if data.datasets.length === 0}
             <div class="card text-sm text-fg-muted">
-                No subfolders found under
-                <span class="font-mono text-fg">{data.dataset_root}</span>.
+                No datasets found yet — drop subfolders into your configured dataset folder, or
+                <a href="/settings" class="text-accent hover:text-accent-hover">change the path</a>.
             </div>
         {:else}
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {#each data.datasets as ds (ds.path)}
-                    <a
-                        href={`/datasets/folder/${encodeURIComponent(ds.name)}`}
+                    <!-- Only the title row is an <a>. ConnectorLinks (and its
+                         fixed modal) must NOT be inside the <a> — clicks on
+                         the modal would otherwise bubble to the <a> and
+                         navigate, because stopPropagation in the modal
+                         doesn't cancel the <a>'s default action. -->
+                    <div
                         class="card transition-colors hover:border-border-strong hover:bg-bg-2/40"
                     >
-                        <div class="flex items-start justify-between gap-2">
-                            <h3 class="truncate text-sm font-medium" title={ds.path}>{ds.name}</h3>
-                            <span
-                                class="shrink-0 rounded-full bg-bg-3 px-2 py-0.5 text-xs text-fg-muted"
-                            >
-                                {ds.image_count} img
-                            </span>
-                        </div>
-                        <!-- Connector links replace the redundant full path
-                             (the basename is already shown above; the path
-                             title= attribute keeps the full one on hover). -->
+                        <a
+                            href={`/datasets/folder/${encodeURIComponent(ds.name)}`}
+                            class="block hover:text-accent-hover"
+                        >
+                            <div class="flex items-start justify-between gap-2">
+                                <h3 class="truncate text-sm font-medium" title={ds.path}>{ds.name}</h3>
+                                <span
+                                    class="shrink-0 rounded-full bg-bg-3 px-2 py-0.5 text-xs text-fg-muted"
+                                >
+                                    {ds.image_count} img
+                                </span>
+                            </div>
+                        </a>
                         <div class="mt-2">
                             <ConnectorLinks
                                 scope_kind="folder"
@@ -327,9 +330,10 @@
                                 links={data.links_by_folder[ds.path] ?? []}
                             />
                         </div>
-                    </a>
+                    </div>
                 {/each}
             </div>
         {/if}
     </section>
-</div>
+    </div>
+</MainPanel>

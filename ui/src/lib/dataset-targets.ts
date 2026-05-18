@@ -81,28 +81,69 @@ export interface GroupGap {
     label: string;
     actual: number;
     target: number;
+    /** Signed delta: target - actual. Positive when under-rep, negative when
+     * over-rep, ~0 at target. The prune engine reads this; the add engine
+     * uses `gap` below. */
+    signed_gap: number;
     /** Positive when we need MORE of this group. 0 = at/above target. */
     gap: number;
 }
 
-export function framingGroupGaps(coverage: import('./framing-grid').FramingCoverage): GroupGap[] {
-    const total = coverage.total - coverage.unknown;
+/** Returns the basis used for per-bucket targets:
+ *   - max_size when the scope has an explicit cap set (then targets reflect
+ *     the eventual capped distribution, NOT the current count — so over-rep
+ *     can fire before the dataset fills)
+ *   - classified count otherwise (legacy proportional behavior — over-rep
+ *     never fires by construction since targets follow actuals) */
+function targetBasis(
+    classified: number,
+    maxSize: number | null | undefined
+): number {
+    return maxSize && maxSize > 0 ? maxSize : classified;
+}
+
+export function framingGroupGaps(
+    coverage: import('./framing-grid').FramingCoverage,
+    maxSize: number | null = null
+): GroupGap[] {
+    const classified = coverage.total - coverage.unknown;
+    const basis = targetBasis(classified, maxSize);
     return FRAMING_TARGETS.map((g) => {
         const actual = g.ids.reduce((s, id) => s + (coverage.counts[id] ?? 0), 0);
-        const target = total * g.target_pct;
-        return { key: g.key, label: g.label, actual, target, gap: Math.max(0, target - actual) };
+        const target = basis * g.target_pct;
+        const signed = target - actual;
+        return {
+            key: g.key,
+            label: g.label,
+            actual,
+            target,
+            signed_gap: signed,
+            gap: Math.max(0, signed)
+        };
     });
 }
 
-export function poseGroupGaps(coverage: import('./pose-grid').PoseCoverage): GroupGap[] {
-    const total = coverage.total - coverage.unknown;
+export function poseGroupGaps(
+    coverage: import('./pose-grid').PoseCoverage,
+    maxSize: number | null = null
+): GroupGap[] {
+    const classified = coverage.total - coverage.unknown;
+    const basis = targetBasis(classified, maxSize);
     return POSE_TARGETS.map((g) => {
         const actual = POSE_BUCKETS.filter((b) => g.match(b.id)).reduce(
             (s, b) => s + (coverage.counts[b.id] ?? 0),
             0
         );
-        const target = total * g.target_pct;
-        return { key: g.key, label: g.label, actual, target, gap: Math.max(0, target - actual) };
+        const target = basis * g.target_pct;
+        const signed = target - actual;
+        return {
+            key: g.key,
+            label: g.label,
+            actual,
+            target,
+            signed_gap: signed,
+            gap: Math.max(0, signed)
+        };
     });
 }
 

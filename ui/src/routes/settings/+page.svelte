@@ -1,18 +1,15 @@
 <script lang="ts">
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
+    import { page } from '$app/state';
+    import MainPanel from '$lib/components/MainPanel.svelte';
     import type { ConnectorId, ConnectorTypeInfo } from '$lib/connectors/types';
     import type { ActionData, PageData } from './$types';
 
     let { data, form }: { data: PageData; form: ActionData } = $props();
 
     interface Field {
-        key:
-            | 'dataset_root'
-            | 'tests_root'
-            | 'lora_root'
-            | 'python_bin'
-            | 'glt_root';
+        key: 'dataset_root' | 'tests_root' | 'lora_root' | 'python_bin';
         label: string;
         hint: string;
         placeholder: string;
@@ -21,33 +18,27 @@
     const fields: Field[] = [
         {
             key: 'dataset_root',
-            label: 'Dataset paths',
-            hint: 'Root folder for datasets. Each immediate subfolder is treated as one dataset.',
+            label: 'Dataset folder',
+            hint: 'Where your training datasets live. Each subfolder shows up as one dataset.',
             placeholder: '/home/you/datasets'
         },
         {
             key: 'tests_root',
-            label: 'Tests paths',
-            hint: 'Root folder where grid test results are written (one subfolder per run).',
+            label: 'Tests folder',
+            hint: 'Where grid test results are written. Each run gets its own subfolder.',
             placeholder: '/home/you/glt-tests'
         },
         {
             key: 'lora_root',
-            label: 'Lora paths',
-            hint: 'Root folder for LoRA outputs. Each immediate subfolder is one family / training run.',
+            label: 'LoRA folder',
+            hint: 'Where your LoRA training output lives. Each subfolder is one family.',
             placeholder: '/home/you/loras'
         },
         {
             key: 'python_bin',
             label: 'Python interpreter',
-            hint: 'Path to the Python binary of the venv that has glt installed (insightface, onnxruntime, sharp deps). Used to compute dataset centroids.',
-            placeholder: '/home/you/glt/.venv/bin/python'
-        },
-        {
-            key: 'glt_root',
-            label: 'GridLoraTester repo root',
-            hint: 'Absolute path to the GridLoraTester checkout (the folder that contains the `glt/` package). The dashboard cd-s here before spawning `python -m glt`.',
-            placeholder: '/home/you/GridLoraTester'
+            hint: 'Path to the Python that runs inference. Usually the .venv at the repo root.',
+            placeholder: '/home/you/GridLoraTester/.venv/bin/python'
         }
     ];
 
@@ -59,6 +50,11 @@
     let connectorSaving = $state(false);
     let removingId = $state<ConnectorId | null>(null);
     let testingId = $state<ConnectorId | null>(null);
+    /** + Add dropdown state (lists every connector type that isn't already
+     * configured). Wrapper bound so the click-outside listener can detect
+     * dismissal events. */
+    let addDropdownOpen = $state(false);
+    let addDropdownWrapper = $state<HTMLDivElement | null>(null);
 
     /** Types not yet configured — what the + Add menu offers. */
     let availableToAdd = $derived(
@@ -70,6 +66,67 @@
     function findType(id: ConnectorId): ConnectorTypeInfo | undefined {
         return data.connector_types.find((t) => t.id === id);
     }
+
+    /** Click an item in the + Add dropdown. OAuth-flavored connectors
+     * navigate straight to their start route; others open the credentials
+     * modal. */
+    function pickAdd(t: ConnectorTypeInfo) {
+        addDropdownOpen = false;
+        if (t.oauth_start_url) {
+            window.location.href = t.oauth_start_url;
+            return;
+        }
+        addingType = t;
+    }
+
+    /** Same as pickAdd but for an already-configured connector's "Edit"
+     * action. OAuth connectors restart their flow (re-consent); others
+     * reopen the credentials modal pre-filled. */
+    function editConnector(id: ConnectorId) {
+        const t = findType(id);
+        if (!t) return;
+        if (t.oauth_start_url) {
+            window.location.href = t.oauth_start_url;
+            return;
+        }
+        addingType = t;
+    }
+
+    $effect(() => {
+        if (!addDropdownOpen) return;
+        function onGlobalClick(e: MouseEvent) {
+            const target = e.target as Node | null;
+            if (addDropdownWrapper && target && addDropdownWrapper.contains(target)) {
+                return;
+            }
+            addDropdownOpen = false;
+        }
+        document.addEventListener('click', onGlobalClick, true);
+        return () => document.removeEventListener('click', onGlobalClick, true);
+    });
+
+    /** ?google_oauth=... flash params set by the OAuth callback. Mapped to
+     * user-facing copy + tone for the connectors section banner. */
+    let oauthFlash = $derived.by(() => {
+        const v = page.url.searchParams.get('google_oauth');
+        if (!v) return null;
+        const map: Record<string, { tone: 'ok' | 'err'; msg: string }> = {
+            ok: { tone: 'ok', msg: 'Signed in to Google Photos.' },
+            state_mismatch: {
+                tone: 'err',
+                msg: 'OAuth callback state mismatch — try again.'
+            },
+            exchange_failed: {
+                tone: 'err',
+                msg: 'Could not exchange the authorization code with Google.'
+            },
+            signin_failed: {
+                tone: 'err',
+                msg: 'Google returned tokens but signing in failed.'
+            }
+        };
+        return map[v] ?? { tone: 'err' as const, msg: `OAuth error: ${v}` };
+    });
 
     function fmtDate(iso: string | null) {
         if (!iso) return null;
@@ -85,7 +142,8 @@
     <title>Settings — GridLoraTester</title>
 </svelte:head>
 
-<div class="space-y-10 p-6">
+<MainPanel size="narrow">
+    <div class="space-y-10">
     <header>
         <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
         <p class="mt-1 text-sm text-fg-muted">Configure where GridLoraTester looks for your data.</p>
@@ -127,6 +185,41 @@
                 </div>
             {/each}
 
+            <!-- face_gpu_mem_limit_gb is intentionally NOT exposed in the
+                 UI — capping ORT's BFC arena causes mid-run OOM crashes
+                 (the allocator can't release memory to satisfy peak
+                 requests once at the cap). The setting + plumbing remain
+                 in case we ever need to re-surface it for a specific
+                 contention scenario; default 0 = no cap. -->
+
+            <!-- Suggestions tuning section -->
+            <div class="space-y-1.5 border-t border-border pt-5">
+                <label for="suggestion_min_image_mp" class="text-sm font-medium"
+                    >Suggestion min. image resolution (megapixels)</label
+                >
+                <input
+                    id="suggestion_min_image_mp"
+                    name="suggestion_min_image_mp"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="200"
+                    value={(form?.settings ?? data.settings).suggestion_min_image_mp}
+                    placeholder="1"
+                    class="input max-w-[12rem] font-mono"
+                />
+                <p class="text-xs text-fg-faint">
+                    Photos smaller than this won't be suggested for import. Default
+                    <span class="font-mono">1 MP</span> ≈ 1000×1000 — a sensible floor for
+                    portrait training. Set <span class="font-mono">0</span> to disable.
+                </p>
+                {#if form?.warnings?.suggestion_min_image_mp}
+                    <p class="text-xs text-amber-400">
+                        {form.warnings.suggestion_min_image_mp}
+                    </p>
+                {/if}
+            </div>
+
             <div class="flex items-center gap-3 pt-2">
                 <button type="submit" class="btn-primary" disabled={saving}>
                     {saving ? 'Saving…' : 'Save'}
@@ -146,20 +239,40 @@
             <div>
                 <h2 class="text-base font-medium">Connectors</h2>
                 <p class="text-xs text-fg-faint">
-                    External photo databases. Used as sources to build datasets.
+                    External photo sources used to build your datasets.
                 </p>
             </div>
             {#if availableToAdd.length > 0}
-                <button
-                    type="button"
-                    class="btn-primary"
-                    onclick={() => (addingType = availableToAdd[0])}
-                    title={availableToAdd.length > 1
-                        ? `Pick one of: ${availableToAdd.map((t) => t.label).join(', ')}`
-                        : `Add ${availableToAdd[0].label}`}
-                >
-                    + Add connector
-                </button>
+                <div class="relative inline-block" bind:this={addDropdownWrapper}>
+                    <button
+                        type="button"
+                        class="btn-primary"
+                        aria-haspopup="menu"
+                        aria-expanded={addDropdownOpen}
+                        onclick={() => (addDropdownOpen = !addDropdownOpen)}
+                    >
+                        + Add connector
+                    </button>
+                    {#if addDropdownOpen}
+                        <div
+                            class="absolute right-0 top-full z-30 mt-1 w-56 rounded-md border border-border bg-bg-1 p-1 shadow-lg"
+                            role="menu"
+                        >
+                            {#each availableToAdd as t (t.id)}
+                                <button
+                                    type="button"
+                                    class="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-bg-2"
+                                    onclick={() => pickAdd(t)}
+                                >
+                                    <span>{t.label}</span>
+                                    {#if t.oauth_start_url}
+                                        <span class="text-[10px] text-fg-faint">OAuth</span>
+                                    {/if}
+                                </button>
+                            {/each}
+                        </div>
+                    {/if}
+                </div>
             {/if}
         </div>
 
@@ -235,10 +348,13 @@
                                         <button
                                             type="button"
                                             class="btn-ghost px-2 py-1 text-xs"
-                                            onclick={() => {
-                                                const t = findType(c.id);
-                                                if (t) addingType = t;
-                                            }}>Edit</button
+                                            onclick={() => editConnector(c.id)}
+                                            title={findType(c.id)?.oauth_start_url
+                                                ? 'Restart OAuth consent'
+                                                : 'Edit credentials'}
+                                            >{findType(c.id)?.oauth_start_url
+                                                ? 'Re-sign-in'
+                                                : 'Edit'}</button
                                         >
                                         <form
                                             method="POST"
@@ -275,6 +391,15 @@
             </table>
         </div>
 
+        {#if oauthFlash}
+            <p
+                class="mt-2 text-xs {oauthFlash.tone === 'ok'
+                    ? 'text-emerald-300'
+                    : 'text-red-300'}"
+            >
+                {oauthFlash.msg}
+            </p>
+        {/if}
         {#if form?.connector_saved}
             <p class="mt-2 text-xs text-emerald-300">
                 {findType(form.connector_saved)?.label} saved.
@@ -291,7 +416,8 @@
             </p>
         {/if}
     </section>
-</div>
+    </div>
+</MainPanel>
 
 <!-- ============================================================ -->
 <!-- Add / Edit connector modal                                    -->
@@ -338,6 +464,7 @@
                 <input type="hidden" name="connector_id" value={t.id} />
 
                 {#each t.credentials_fields as f (f.key)}
+                    {@const current = data.credentials?.[t.id]?.[f.key]}
                     <div class="space-y-1.5">
                         <label for={`cred-${t.id}-${f.key}`} class="text-sm font-medium"
                             >{f.label}{f.required ? ' *' : ''}</label
@@ -351,6 +478,7 @@
                             autocomplete="off"
                             spellcheck="false"
                             required={f.required}
+                            value={typeof current === 'string' ? current : ''}
                         />
                         {#if f.help}
                             <p class="text-xs text-fg-faint">{f.help}</p>

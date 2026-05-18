@@ -3,11 +3,11 @@
 //      the worker uses)
 //   2. Write to disk under <target_folder>/<safe filename>, avoiding
 //      collisions with a numeric suffix
-//   3. Copy the connector_faces rows into face_embeddings, keyed on the
-//      new on-disk path
-//   4. Re-derive the folder's centroid + per-row similarity
-//   5. Record the import in dataset_imports so suggestions don't re-propose
-//      this picture
+//   3. Upsert a `dataset_images` row tagged source_kind='imported' so the
+//      suggestion engine's "already imported" dedup picks it up
+//   4. Copy the connector_faces rows into face_embeddings, keyed on the
+//      new on-disk path (FK enforces dataset_images was inserted first)
+//   5. Re-derive the folder's centroid + per-row similarity
 import { existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 
@@ -19,18 +19,21 @@ import {
 import { getConnector } from './connectors/registry';
 import type { LinkScope } from './connector-links';
 import { findGroupsContaining, getDatasetGroup } from './dataset-groups';
+import {
+    importedKeysForFolder,
+    importedKeysForFolders,
+    upsertImported
+} from './dataset-images';
 import { db } from './db';
 
 const insertFaceStmt = db.prepare(`
     INSERT INTO face_embeddings(
         image_path, face_index, bbox_json, det_score, embedding_b64,
-        is_target, similarity, pitch, yaw, roll,
-        image_width, image_height
+        is_target, similarity, pitch, yaw, roll
     )
     VALUES(
         @image_path, @face_index, @bbox_json, @det_score, @embedding_b64,
-        0, NULL, @pitch, @yaw, @roll,
-        @image_width, @image_height
+        0, NULL, @pitch, @yaw, @roll
     )
     ON CONFLICT(image_path, face_index) DO UPDATE SET
         bbox_json = excluded.bbox_json,
@@ -39,13 +42,11 @@ const insertFaceStmt = db.prepare(`
         pitch = excluded.pitch,
         yaw = excluded.yaw,
         roll = excluded.roll,
-        image_width = excluded.image_width,
-        image_height = excluded.image_height,
         computed_at = datetime('now')
 `);
 
 const loadConnectorPicStmt = db.prepare(
-    'SELECT filename, image_width, image_height FROM connector_pictures WHERE connector_id = ? AND picture_id = ?'
+    'SELECT filename, image_width, image_height, phash FROM connector_pictures WHERE connector_id = ? AND picture_id = ?'
 );
 const loadConnectorFacesStmt = db.prepare(`
     SELECT face_index, bbox_json, det_score, embedding_b64, pitch, yaw, roll
@@ -53,18 +54,15 @@ const loadConnectorFacesStmt = db.prepare(`
     WHERE connector_id = ? AND picture_id = ?
     ORDER BY face_index ASC
 `);
-const insertImportStmt = db.prepare(`
-    INSERT INTO dataset_imports(scope_kind, scope_key, connector_id, picture_id, target_folder, dest_image_path)
-    VALUES(?, ?, ?, ?, ?, ?)
-`);
-const listImportsForScopeStmt = db.prepare(
-    'SELECT connector_id, picture_id FROM dataset_imports WHERE scope_kind = ? AND scope_key = ?'
-);
 
 interface ConnectorPicMeta {
     filename: string | null;
     image_width: number | null;
     image_height: number | null;
+    /** Carried over to dataset_images.phash so the imported image is
+     * immediately dedup-aware — saves running a compute-image-hashes
+     * pass just to backfill the one row we already know. */
+    phash: string | null;
 }
 interface ConnectorFaceRow {
     face_index: number;
@@ -120,6 +118,16 @@ function assertTargetAllowed(
             `target_folder ${target_folder} is not a member of group ${id}`
         );
     }
+}
+
+/** Per-connector full-resolution download URL — must match the format
+ * each connector's proxyFetch / downloadPicture recognizes. */
+function downloadUrlFor(connector_id: ConnectorId, picture_id: string): string {
+    if (connector_id === 'immich') {
+        return `/connectors/immich/thumb/assets/${picture_id}/original`;
+    }
+    // hard-drive: picture.id is the absolute path, download_url unused.
+    return picture_id;
 }
 
 function nonCollidingPath(folder: string, baseName: string): string {
@@ -184,14 +192,18 @@ export async function addPictureToDataset(input: ImportInput): Promise<ImportRes
 
     // Download the bytes via the connector. For hard-drive this reads from
     // disk; for Immich/etc it makes the auth'd HTTP call.
+    //
+    // `download_url` MUST be the connector-specific proxy URL Immich's
+    // proxyFetch recognizes (`/connectors/immich/thumb/<rest>`). Passing
+    // just the picture_id (UUID) lets proxyFetch's prefix check fall
+    // through to a bare fetch against `<base_url><uuid>` (no separator)
+    // → DNS ENOTFOUND. HD downloadPicture ignores this field (reads
+    // picture.id as a filesystem path).
     const connector = getConnector(input.connector_id);
     const bytes = await connector.downloadPicture({
         id: input.picture_id,
         filename: meta.filename ?? input.picture_id,
-        // The downloader for Immich uses our own proxy URL; for HD it just
-        // reads the path. Either way these fields aren't actually consumed
-        // beyond `id`, so the placeholders below are fine.
-        download_url: input.picture_id,
+        download_url: downloadUrlFor(input.connector_id, input.picture_id),
         created_date: '',
         width: meta.image_width ?? 0,
         height: meta.image_height ?? 0
@@ -218,8 +230,19 @@ export async function addPictureToDataset(input: ImportInput): Promise<ImportRes
     writeFileSync(tmp, bytes, { flag: 'wx' });
 
     try {
-        // Copy face rows + record import in a single tx.
+        // dataset_images first (FK target), THEN face rows. Single tx so a
+        // failure leaves no orphan. Phash + dims carried over from the
+        // connector record — no need to wait for compute-image-hashes to
+        // backfill, the imported file participates in dedup immediately.
         db.transaction(() => {
+            upsertImported({
+                image_path: dest,
+                connector_id: input.connector_id,
+                picture_id: input.picture_id,
+                phash: meta.phash,
+                image_width: meta.image_width,
+                image_height: meta.image_height
+            });
             for (const f of faces) {
                 insertFaceStmt.run({
                     image_path: dest,
@@ -229,21 +252,9 @@ export async function addPictureToDataset(input: ImportInput): Promise<ImportRes
                     embedding_b64: f.embedding_b64,
                     pitch: f.pitch,
                     yaw: f.yaw,
-                    roll: f.roll,
-                    image_width: meta.image_width,
-                    image_height: meta.image_height
+                    roll: f.roll
                 });
             }
-            // Store the *resolved* target_folder so the audit trail stays
-            // consistent with what was actually written.
-            insertImportStmt.run(
-                input.scope_kind,
-                input.scope_key,
-                input.connector_id,
-                input.picture_id,
-                targetFolder,
-                dest
-            );
         })();
         renameSync(tmp, dest);
     } catch (e) {
@@ -278,14 +289,24 @@ export async function addPictureToDataset(input: ImportInput): Promise<ImportRes
 }
 
 /** Set of "connector_id::picture_id" already imported into this scope.
- * Used by the suggestion engine to dedupe candidates. */
+ * Used by the suggestion engine to dedupe candidates.
+ *
+ * Derived from dataset_images (the canonical "what's in the dataset" table).
+ * For folder scope: walks the one folder. For group scope: unions every
+ * member folder of the group. This is a behavior change vs. the pre-redesign
+ * `dataset_imports` table, which keyed lineage by the SCOPE that initiated
+ * the import — folder-scoped suggestions would miss imports done via the
+ * parent group. The new path correctly excludes those. */
 export function importedKeysForScope(
     scope_kind: LinkScope,
     scope_key: string
 ): Set<string> {
-    const rows = listImportsForScopeStmt.all(scope_kind, scope_key) as {
-        connector_id: string;
-        picture_id: string;
-    }[];
-    return new Set(rows.map((r) => `${r.connector_id}::${r.picture_id}`));
+    if (scope_kind === 'folder') {
+        return importedKeysForFolder(scope_key);
+    }
+    const id = Number(scope_key);
+    if (!Number.isFinite(id) || id <= 0) return new Set();
+    const group = getDatasetGroup(id);
+    if (!group) return new Set();
+    return importedKeysForFolders(group.paths);
 }

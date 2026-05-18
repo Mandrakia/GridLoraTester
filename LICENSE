@@ -1,21 +1,269 @@
-MIT License
-
+GridLoraTester
 Copyright (c) 2026 Mandrakia
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software is provided under a dual license:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+  1. The PolyForm Noncommercial License 1.0.0 (reproduced below) for
+     personal, hobby, research, and other noncommercial use.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+  2. A separate commercial license for any commercial use. See the
+     "COMMERCIAL LICENSE" section at the end of this file for contact
+     details.
+
+This is a SOURCE-AVAILABLE license, NOT an OSI-approved "Open Source"
+license — commercial use is reserved.
+
+================================================================================
+                  PolyForm Noncommercial License 1.0.0
+                       https://polyformproject.org/
+================================================================================
+
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
+
+## Acceptance
+
+In order to get any license under these terms, you must agree to them as
+both strict obligations and conditions to all your licenses.
+
+## Copyright License
+
+The licensor grants you a copyright license for the software to do
+everything you might do with the software that would otherwise infringe
+the licensor's copyright in it for any permitted purpose. However, you
+may only distribute the software according to [Distribution
+License](#distribution-license) and make changes or new works based on
+the software according to [Changes and New Works
+License](#changes-and-new-works-license).
+
+## Distribution License
+
+The licensor grants you an additional copyright license to distribute
+copies of the software. Your license to distribute covers distributing
+the software with changes and new works permitted by [Changes and New
+Works License](#changes-and-new-works-license).
+
+## Notices
+
+You must ensure that anyone who gets a copy of any part of the software
+from you also gets a copy of these terms or the URL for them above, as
+well as copies of any plain-text lines beginning with `Required Notice:`
+that the licensor provided with the software. For example:
+
+> Required Notice: Copyright (c) 2026 Mandrakia (GridLoraTester)
+
+## Changes and New Works License
+
+The licensor grants you an additional copyright license to make changes
+and new works based on the software for any permitted purpose.
+
+## Patent License
+
+The licensor grants you a patent license for the software that covers
+patent claims the licensor can license, or becomes able to license, that
+you would infringe by using the software.
+
+## Noncommercial Purposes
+
+Any noncommercial purpose is a permitted purpose.
+
+## Personal Uses
+
+Personal use for research, experiment, and testing for the benefit of
+public knowledge, personal study, private entertainment, hobby projects,
+amateur pursuits, or religious observance, without any anticipated
+commercial application, is use for a permitted purpose.
+
+## Noncommercial Organizations
+
+Use by any charitable organization, educational institution, public
+research organization, public safety or health organization, environmental
+protection organization, or government institution is use for a permitted
+purpose regardless of the source of funding or obligations resulting from
+the funding.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the law. These
+terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your
+licenses to anyone else, or prevent the licensor from granting licenses
+to anyone else.  These terms do not imply any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or contributes
+to infringement of any patent, your patent license for the software
+granted under these terms ends immediately. If your company makes such a
+claim, your patent license ends immediately for work on behalf of your
+company.
+
+## Violations
+
+The first time you are notified in writing that you have violated any of
+these terms, or done anything with the software not covered by your
+licenses, your licenses can nonetheless continue if you come into full
+compliance with these terms, and take practical steps to correct past
+violations, within 32 days of receiving notice.  Otherwise, all your
+licenses end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without any
+warranty or condition, and the licensor will not be liable to you for any
+damages arising out of these terms or the use or nature of the software,
+under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these terms, and
+the **software** is the software the licensor makes available under
+these terms.
+
+**You** refers to the individual or entity agreeing to these terms.
+
+**Your company** is any legal entity, sole proprietorship, or other kind
+of organization that you work for, plus all organizations that have
+control over, are under the control of, or are under common control with
+that organization.  **Control** means ownership of substantially all the
+assets of an entity, or the power to direct its management and policies
+by vote, contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the software
+under these terms.
+
+**Use** means anything you do with the software requiring one of your
+licenses.
+
+================================================================================
+                            COMMERCIAL LICENSE
+================================================================================
+
+Use of this software for any commercial purpose — including but not
+limited to:
+
+  - integration into a product or service offered to customers, paying
+    or otherwise, as part of a commercial activity;
+  - hosted / SaaS / on-prem deployment within a for-profit organization
+    in furtherance of that organization's commercial activities;
+  - bundling, redistribution, or sublicensing within a commercial
+    distribution;
+  - use to generate, train, fine-tune, or score outputs intended for
+    commercial use;
+
+requires a separate paid commercial license from the copyright holder.
+
+To obtain a commercial license, please contact:
+
+  Mandrakia
+  <commercial-license-contact: REPLACE WITH EMAIL OR URL>
+
+Until a commercial license is in effect in writing, all such use is
+unlicensed and constitutes a violation of these terms.
+
+================================================================================
+                            THIRD-PARTY SOFTWARE
+================================================================================
+
+GridLoraTester depends on, and at runtime loads, third-party software
+libraries under their own respective licenses. None of these third-party
+licenses impose copyleft obligations on GridLoraTester or its derivative
+works. Full license text for each item is available from the upstream
+project.
+
+Python runtime
+--------------
+  diffusers .............. Apache-2.0    Hugging Face
+  transformers ........... Apache-2.0    Hugging Face
+  peft ................... Apache-2.0    Hugging Face
+  accelerate ............. Apache-2.0    Hugging Face
+  huggingface_hub ........ Apache-2.0    Hugging Face
+  safetensors ............ Apache-2.0    Hugging Face
+  hf_transfer ............ Apache-2.0    Hugging Face
+  gradio ................. Apache-2.0    Gradio team
+  opencv-python-headless . Apache-2.0    OpenCV
+  flatbuffers ............ Apache-2.0    Google
+  packaging .............. Apache-2.0 OR BSD-2-Clause
+  SageAttention .......... Apache-2.0    THU-ML
+  torchao ................ BSD-3-Clause  Meta
+  torch (PyTorch) ........ BSD-3-Clause  Meta
+  uvicorn ................ BSD-3-Clause  Encode
+  sympy .................. BSD-3-Clause  SymPy contributors
+  protobuf ............... BSD-3-Clause  Google
+  numpy .................. BSD-3-Clause + 0BSD + MIT + Zlib + CC0
+  fastapi ................ MIT           Sebastián Ramírez
+  insightface (library) .. MIT           DeepInsight
+  onnxruntime ............ MIT           Microsoft
+  coloredlogs ............ MIT           Peter Odding
+
+Node.js runtime + build chain
+-----------------------------
+  svelte ................. MIT           Svelte contributors
+  @sveltejs/kit .......... MIT           Svelte contributors
+  @sveltejs/adapter-node . MIT           Svelte contributors
+  vite ................... MIT           Vite contributors
+  tailwindcss ............ MIT           Tailwind Labs
+  better-sqlite3 ......... MIT           Joshua Wise
+  blockhash-core ......... MIT           Linus Unnebäck
+  sharp .................. Apache-2.0    Lovell Fuller
+  typescript ............. Apache-2.0    Microsoft
+
+GPU runtime libraries (NVIDIA)
+------------------------------
+The `nvidia-cu13-*` pip wheels (CUDA 13 runtime, cuDNN 9) ship under the
+NVIDIA Software Development Kit EULA, not an OSI-approved license.
+Redistribution is permitted under that EULA's conditions:
+
+  - The redistributing application must add material additional
+    functionality beyond the SDK itself (GridLoraTester does).
+  - Only the components listed in Attachment A of the EULA for the target
+    CUDA version may be bundled.
+  - The NVIDIA attribution notice must be preserved.
+
+Reference: https://docs.nvidia.com/cuda/eula/index.html
+
+If you build a redistributable Docker image or installer from this
+project, verify Attachment A coverage for the specific CUDA / cuDNN
+versions you ship before distributing.
+
+================================================================================
+                  THIRD-PARTY MODELS — NOT DISTRIBUTED HEREWITH
+================================================================================
+
+GridLoraTester orchestrates third-party machine-learning models that it
+downloads at runtime from external sources (Hugging Face Hub, InsightFace
+release mirrors). These model weights are NOT bundled with this software
+and are NOT covered by this License. Users must independently obtain
+valid licenses for any model they choose to run, in addition to any
+license required for GridLoraTester itself.
+
+The following defaults referenced by the code carry non-permissive
+licenses that restrict commercial use:
+
+  FLUX.2-klein-9B (default --model-path for grid generation)
+  ----------------------------------------------------------
+    License: FLUX.2 Non-Commercial License (Black Forest Labs)
+    Restricts:  revenue-generating activity, direct end-user interactions,
+                training / fine-tuning / distillation for commercial use.
+    Commercial path:  paid Self-Serve or Enterprise license from BFL.
+                      https://bfl.ai/licensing
+    Alternative:  FLUX.2-klein-4B is Apache-2.0 and is unrestricted for
+                  commercial use. Pass
+                    --model-path black-forest-labs/FLUX.2-klein-4B
+                  to opt into the permissive variant.
+
+  InsightFace `buffalo_l` model pack (default face-similarity scoring)
+  -------------------------------------------------------------------
+    License: Non-commercial research only (DeepInsight).
+    Restricts:  any commercial use, including internal use by a commercial
+                operation that processes customer data through the model.
+    Commercial path:  paid commercial license from DeepInsight.
+                      Contact: recognition-oss-pack@insightface.ai
+
+A commercial license for GridLoraTester does NOT include or extend to
+third-party model licenses. Commercial licensees remain solely responsible
+for obtaining valid licenses for every model used at runtime.
+
+================================================================================
