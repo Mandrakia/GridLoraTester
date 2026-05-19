@@ -166,12 +166,12 @@
                         class="input w-24 px-2 py-1 text-xs"
                     />
                     <span class="tabular-nums text-fg-faint">
-                        {data.prune.n_active}
+                        {data.n_active}
                         {#if data.max_size != null}/ {data.max_size}{/if}
                     </span>
                     <button
                         type="submit"
-                        class="btn btn-secondary px-2 py-1 text-xs"
+                        class="btn-secondary px-2.5 py-1 text-xs"
                         disabled={savingMaxSize}
                     >
                         {savingMaxSize ? '…' : 'Save'}
@@ -179,7 +179,7 @@
                 </form>
                 <a
                     href="/datasets/group/{data.group.id}/export"
-                    class="btn btn-secondary px-3 py-1 text-xs"
+                    class="btn-secondary px-3 py-1 text-xs"
                     title="Download a zip of every member dataset, one subfolder per member, with caption sidecars"
                 >
                     Export zip
@@ -353,18 +353,26 @@
                 <h3 class="text-xs uppercase tracking-wide text-fg-muted">Framing</h3>
                 <FramingCoverageTable coverage={globalFraming} />
             </div>
-            <PruneSuggestions
-                prune={data.prune}
-                excluded={data.excluded}
-                excludeAction="?/exclude"
-                restoreAction="?/restore"
-            />
-            <ConnectorSuggestions
-                suggestions={data.group_suggestions}
-                scope_kind="group"
-                scope_key={String(data.group.id)}
-                target_folders={data.datasets.map((d) => d.path)}
-            />
+            {#await data.prune}
+                <p class="text-xs text-fg-faint">Computing prune candidates…</p>
+            {:then prune}
+                <PruneSuggestions
+                    {prune}
+                    excluded={data.excluded}
+                    excludeAction="?/exclude"
+                    restoreAction="?/restore"
+                />
+            {/await}
+            {#await data.group_suggestions}
+                <p class="text-xs text-fg-faint">Loading group-wide suggestions…</p>
+            {:then group_suggestions}
+                <ConnectorSuggestions
+                    suggestions={group_suggestions}
+                    scope_kind="group"
+                    scope_key={String(data.group.id)}
+                    target_folders={data.datasets.map((d) => d.path)}
+                />
+            {/await}
         </section>
 
         <hr class="border-border/70" />
@@ -390,12 +398,16 @@
                     <h3 class="text-xs uppercase tracking-wide text-fg-muted">Framing</h3>
                     <FramingCoverageTable coverage={ds.framing_coverage} />
                 </div>
-                <ConnectorSuggestions
-                    suggestions={ds.suggestions}
-                    scope_kind="folder"
-                    scope_key={ds.path}
-                    target_folders={[ds.path]}
-                />
+                {#await ds.suggestions}
+                    <p class="text-xs text-fg-faint">Loading suggestions…</p>
+                {:then suggestions}
+                    <ConnectorSuggestions
+                        {suggestions}
+                        scope_kind="folder"
+                        scope_key={ds.path}
+                        target_folders={[ds.path]}
+                    />
+                {/await}
             </section>
         {/each}
     {/if}

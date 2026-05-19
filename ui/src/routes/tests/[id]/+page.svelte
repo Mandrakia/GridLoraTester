@@ -998,7 +998,7 @@
                                 aria-label={`Zoom ${r.lora_display} × prompt ${p.idx}`}
                             >
                                 <img
-                                    src={c.image_url}
+                                    src="{c.image_url}?w=512"
                                     alt={`${r.lora_display} :: ${p.text}`}
                                     class="block h-full w-full object-cover transition-transform hover:scale-[1.02]"
                                     loading="lazy"

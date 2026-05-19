@@ -104,6 +104,126 @@ def finish_run(
     )
 
 
+def find_resumable_run(
+    conn: sqlite3.Connection,
+    test_id: int,
+    config_snapshot: dict[str, Any],
+    expanded_prompts: list[tuple[str, int, int]],
+) -> int | None:
+    """Return the id of the latest test_run that can be resumed for this
+    test, or None when no compatible terminal run exists.
+
+    A run is resumable iff:
+      - it is the latest run for the test
+      - its status is one of {completed, failed, cancelled} — a still-
+        'running' row means another grid is live; we don't fight for it
+      - its config_json deserializes to the same dict as the current
+        config_snapshot (every effective knob matches)
+      - every prompt_idx referenced in test_run_cells has the same
+        (prompt_text, width, height) as the corresponding entry in
+        `expanded_prompts` — protects against prompt-set edits that would
+        invalidate the comparison axis
+      - the number of distinct prompt_idx in the run equals the current
+        prompt count (extra OR missing prompts both block resume)
+
+    Caller responsibilities:
+      - upsert new test_run_rows / test_run_cells for any LoRAs added
+        since (upsert_cell preserves image_filename via COALESCE so
+        already-generated cells survive)
+      - call revive_run() to flip status back to 'running' before
+        starting the loop
+    """
+    row = conn.execute(
+        """
+        SELECT id, status, config_json
+          FROM test_runs
+         WHERE test_id = ?
+         ORDER BY id DESC
+         LIMIT 1
+        """,
+        (test_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] not in {"completed", "failed", "cancelled"}:
+        return None
+    try:
+        stored = json.loads(row["config_json"] or "{}")
+    except Exception:
+        return None
+    if stored != config_snapshot:
+        return None
+
+    cell_rows = conn.execute(
+        """
+        SELECT DISTINCT prompt_idx, prompt_text, prompt_width, prompt_height
+          FROM test_run_cells
+         WHERE run_id = ?
+        """,
+        (row["id"],),
+    ).fetchall()
+    if len(cell_rows) != len(expanded_prompts):
+        return None
+    expected = {i: ep for i, ep in enumerate(expanded_prompts)}
+    for c in cell_rows:
+        ep = expected.get(int(c["prompt_idx"]))
+        if ep is None:
+            return None
+        if c["prompt_text"] != ep[0] or int(c["prompt_width"]) != ep[1] or int(c["prompt_height"]) != ep[2]:
+            return None
+    return int(row["id"])
+
+
+def revive_run(conn: sqlite3.Connection, run_id: int) -> None:
+    """Flip a terminal run back to 'running'. Clears error + finished_at
+    so the dashboard's live polling resumes cleanly. Idempotent."""
+    conn.execute(
+        """
+        UPDATE test_runs
+           SET status      = 'running',
+               error       = NULL,
+               finished_at = NULL
+         WHERE id = ?
+        """,
+        (run_id,),
+    )
+
+
+def existing_lora_idx_map(
+    conn: sqlite3.Connection, run_id: int,
+) -> dict[str, int]:
+    """Display → lora_idx map for a run. Used when resuming so newly-added
+    LoRAs get fresh idx slots while previously-seen LoRAs keep theirs (the
+    cells already point at those idx values)."""
+    rows = conn.execute(
+        "SELECT lora_idx, lora_display FROM test_run_rows WHERE run_id = ?",
+        (run_id,),
+    ).fetchall()
+    return {row["lora_display"]: int(row["lora_idx"]) for row in rows}
+
+
+def existing_cell_filenames_by_lora(
+    conn: sqlite3.Connection, run_id: int,
+) -> dict[str, dict[int, str | None]]:
+    """For each LoRA display in this run, the prompt_idx → image_filename
+    map. Used to decide whether a LoRA row is already complete (every
+    image_filename present) and can be skipped when resuming."""
+    rows = conn.execute(
+        """
+        SELECT r.lora_display, c.prompt_idx, c.image_filename
+          FROM test_run_cells c
+          JOIN test_run_rows  r ON r.run_id = c.run_id AND r.lora_idx = c.lora_idx
+         WHERE c.run_id = ?
+        """,
+        (run_id,),
+    ).fetchall()
+    out: dict[str, dict[int, str | None]] = {}
+    for row in rows:
+        d = out.setdefault(row["lora_display"], {})
+        d[int(row["prompt_idx"])] = row["image_filename"]
+    return out
+
+
 # ---- test_run_rows ----------------------------------------------------
 
 def upsert_row(

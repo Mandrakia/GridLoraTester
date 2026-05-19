@@ -201,6 +201,11 @@ def parse_args():
                         help="Directory to dump intermediate tensors for parity debugging.")
     parser.add_argument("--dry-run", action="store_true",
                         help="List the work without loading the model.")
+    parser.add_argument("--force", action="store_const", const=True, default=None,
+                        help="Always start a fresh test_runs row, never resume the previous one. "
+                             "Default behavior is to resume when the latest run matches the current "
+                             "config + prompt set (LoRAs whose every cell already has an image are "
+                             "skipped). Pass --force to regenerate from scratch.")
     parser.add_argument("--help", action="help", help="Show this help and exit")
     return parser.parse_args()
 
@@ -263,6 +268,7 @@ def _resolve_test_params(args, test_def):
         "preload_loras":   pick(args.preload_loras, advanced.get("preload_loras"),  False),
         "skip_face":       pick(args.skip_face,     advanced.get("skip_face"),      False),
         "qwen_dtype":      pick(args.qwen_dtype,    advanced.get("qwen_dtype"),     "bf16"),
+        "force":           pick(args.force,         advanced.get("force"),          False),
     }
 
 
@@ -588,6 +594,8 @@ def run(args=None):
 
     # ---- Create the run row + resolve output_dir ----
     run_id: int | None = None
+    resumed = False
+    skip_done_loras: set[str] = set()
     if db_conn is not None:
         config_snapshot = {
             "trigger": trigger,
@@ -615,7 +623,32 @@ def run(args=None):
             "qwen_file": args.qwen_file,
             "qwen_dtype": effective["qwen_dtype"],
         }
-        run_id = glt_db.create_run(db_conn, args.test_id, config_snapshot)
+
+        # Resume detection: when the latest run's config + prompt cells
+        # still match, reuse its run_id rather than restarting from 0.
+        # Lets the user drop 2 new LoRAs into the folder and press Run
+        # without re-generating cells that already landed. Force opts out.
+        if not effective["force"]:
+            expanded_tuples = [(ep.text, ep.width, ep.height) for ep in expanded]
+            resumable_id = glt_db.find_resumable_run(
+                db_conn, args.test_id, config_snapshot, expanded_tuples,
+            )
+            if resumable_id is not None:
+                run_id = resumable_id
+                glt_db.revive_run(db_conn, run_id)
+                # Recompute per-LoRA "already complete" set so the
+                # generation loop can skip those rows entirely.
+                fmap = glt_db.existing_cell_filenames_by_lora(db_conn, run_id)
+                n_prompts = len(expanded)
+                for display, by_idx in fmap.items():
+                    if len(by_idx) == n_prompts and all(v is not None for v in by_idx.values()):
+                        skip_done_loras.add(display)
+                resumed = True
+                print(f"[resume] continuing run_id={run_id} "
+                      f"({len(skip_done_loras)} LoRA(s) already complete, will skip)")
+
+        if run_id is None:
+            run_id = glt_db.create_run(db_conn, args.test_id, config_snapshot)
         glt_db.set_run_base_loras(db_conn, run_id, base_meta or [])
         if face_meta_run:
             glt_db.set_run_face_meta(db_conn, run_id, face_meta_run)
@@ -632,12 +665,33 @@ def run(args=None):
         output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"[run] output_dir = {output_dir}"
-          + (f"  (run_id={run_id})" if run_id is not None else ""))
+          + (f"  (run_id={run_id})" if run_id is not None else "")
+          + ("  [resumed]" if resumed else ""))
+
+    # ---- Resolve lora_idx for each LoRA (stable across resume) ----
+    # On a fresh run, lora_idx = position in the sorted loras list. On a
+    # resumed run, previously-seen LoRAs keep their old lora_idx (the
+    # cells already point at it); newly-added LoRAs append at the tail so
+    # their fresh cells don't clobber anything.
+    if resumed and db_conn is not None and run_id is not None:
+        existing_map = glt_db.existing_lora_idx_map(db_conn, run_id)
+        next_idx = max(existing_map.values(), default=-1) + 1
+        lora_idx_for: list[int] = []
+        for lora in loras:
+            display = lora_display_name(lora)
+            if display in existing_map:
+                lora_idx_for.append(existing_map[display])
+            else:
+                lora_idx_for.append(next_idx)
+                next_idx += 1
+    else:
+        lora_idx_for = list(range(len(loras)))
 
     # ---- Pre-populate rows + cells (DB mode) ----
     if db_conn is not None:
         assert run_id is not None
-        for lora_idx, lora in enumerate(loras):
+        for i, lora in enumerate(loras):
+            lora_idx = lora_idx_for[i]
             glt_db.upsert_row(db_conn, run_id, lora_idx, lora_display_name(lora))
             for prompt_idx, ep in enumerate(expanded):
                 glt_db.upsert_cell(
@@ -671,9 +725,14 @@ def run(args=None):
     save_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="save")
 
     try:
-        for lora_idx, lora in enumerate(loras):
+        for i, lora in enumerate(loras):
+            lora_idx = lora_idx_for[i]
+            display = lora_display_name(lora)
+            if display in skip_done_loras:
+                print(f"\n[{i + 1}/{len(loras)}] lora: {display}  [resume:skip — every cell already generated]")
+                continue
             stem = safe_stem(lora)
-            print(f"\n[{lora_idx + 1}/{len(loras)}] lora: {lora_display_name(lora)}")
+            print(f"\n[{i + 1}/{len(loras)}] lora: {display}")
 
             adapter_name: str | None = None
             lokr_mgr = None

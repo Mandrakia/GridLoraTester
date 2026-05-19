@@ -56,6 +56,16 @@
     @apply btn bg-accent text-white hover:bg-accent-hover;
 }
 
+/* Visible neutral action — the second-tier CTA between the loud accent
+ * primary and the no-chrome ghost. Used for "Save", "Export", inline
+ * form submits that aren't the page's main verb. Border + bg both step
+ * up vs the page background so the affordance reads even when sitting
+ * on bg-1 panels. */
+@utility btn-secondary {
+    @apply btn border border-border-strong bg-bg-3 text-fg
+           hover:border-fg-faint hover:bg-[#2a2a2a];
+}
+
 @utility btn-ghost {
     @apply btn text-fg-muted hover:bg-bg-2 hover:text-fg;
 }

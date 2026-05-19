@@ -89,12 +89,12 @@
                         class="input w-24 px-2 py-1 text-xs"
                     />
                     <span class="tabular-nums text-fg-faint">
-                        {data.prune.n_active}
+                        {data.n_active}
                         {#if data.max_size != null}/ {data.max_size}{/if}
                     </span>
                     <button
                         type="submit"
-                        class="btn btn-secondary px-2 py-1 text-xs"
+                        class="btn-secondary px-2.5 py-1 text-xs"
                         disabled={savingMaxSize}
                     >
                         {savingMaxSize ? '…' : 'Save'}
@@ -102,7 +102,7 @@
                 </form>
                 <a
                     href="/datasets/folder/{encodeURIComponent(data.dataset.name)}/export"
-                    class="btn btn-secondary px-3 py-1 text-xs"
+                    class="btn-secondary px-3 py-1 text-xs"
                     title="Download a zip of every active image in this dataset + its caption sidecar"
                 >
                     Export zip
@@ -192,18 +192,26 @@
                 <h2 class="text-base font-medium">Framing distance</h2>
                 <FramingCoverageTable coverage={data.framing_coverage} />
             </section>
-            <PruneSuggestions
-                prune={data.prune}
-                excluded={data.excluded}
-                excludeAction="?/exclude"
-                restoreAction="?/restore"
-            />
-            <ConnectorSuggestions
-                suggestions={data.suggestions}
-                scope_kind="folder"
-                scope_key={data.dataset.path}
-                target_folders={[data.dataset.path]}
-            />
+            {#await data.prune}
+                <p class="text-xs text-fg-faint">Computing prune candidates…</p>
+            {:then prune}
+                <PruneSuggestions
+                    {prune}
+                    excluded={data.excluded}
+                    excludeAction="?/exclude"
+                    restoreAction="?/restore"
+                />
+            {/await}
+            {#await data.suggestions}
+                <p class="text-xs text-fg-faint">Loading suggestions…</p>
+            {:then suggestions}
+                <ConnectorSuggestions
+                    {suggestions}
+                    scope_kind="folder"
+                    scope_key={data.dataset.path}
+                    target_folders={[data.dataset.path]}
+                />
+            {/await}
         </div>
     {/if}
 </MainPanel>

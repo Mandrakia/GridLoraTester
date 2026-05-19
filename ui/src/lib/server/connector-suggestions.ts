@@ -30,7 +30,12 @@ import {
 } from './dataset-images';
 import { importedKeysForScope } from './dataset-import';
 import { db } from './db';
-import { hashHamming, DEDUP_HAMMING_THRESHOLD } from './image-hash';
+import {
+    DEDUP_HAMMING_THRESHOLD,
+    hashHammingPacked,
+    parseHashPacked,
+    type PackedHash
+} from './image-hash';
 import { getSettings } from './settings';
 
 /** Tolerance band: a non-target face whose bbox area falls within this
@@ -450,20 +455,38 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
         input.scope_key
     );
     const dataset_hashes_indexed = datasetHashes.size > 0;
+
+    // Parse every phash once into Uint32 words. Both dedup passes below
+    // run hashHammingPacked over these — the BigInt-parse string path
+    // used to dominate the load time on multi-thousand-candidate scopes.
+    const datasetPacked: { words: PackedHash; dpath: string }[] = [];
+    for (const [dh, dpath] of datasetHashes) {
+        const w = parseHashPacked(dh);
+        if (w) datasetPacked.push({ words: w, dpath });
+    }
+    const candidatePacked = new Map<SuggestionCandidate, PackedHash>();
+    for (const c of candidates) {
+        if (c.phash) {
+            const w = parseHashPacked(c.phash);
+            if (w) candidatePacked.set(c, w);
+        }
+    }
+
     let rejected_duplicates = 0;
     const rejected_duplicate_samples: SuggestionCandidate[] = [];
     const dedupedCandidates: SuggestionCandidate[] = [];
     if (dataset_hashes_indexed) {
         for (const c of candidates) {
             let match: { dataset_path: string; hamming: number } | null = null;
-            if (c.phash) {
+            const cPacked = candidatePacked.get(c);
+            if (cPacked) {
                 let bestH = Infinity;
                 let bestPath: string | null = null;
-                for (const [dh, dpath] of datasetHashes) {
-                    const h = hashHamming(c.phash, dh);
+                for (const d of datasetPacked) {
+                    const h = hashHammingPacked(cPacked, d.words);
                     if (h < bestH) {
                         bestH = h;
-                        bestPath = dpath;
+                        bestPath = d.dpath;
                         if (bestH === 0) break; // can't beat exact match
                     }
                 }
@@ -496,26 +519,32 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
     // Second pass: dedup ACROSS surviving candidates. Two connector
     // pictures of the same scene (burst shots, edits in different albums)
     // would otherwise both surface as "fill the same gap" suggestions —
-    // visually redundant for the user. Sort by tempered_delta desc so
-    // the best-scoring candidate of each near-dup cluster is the one we
-    // keep, and drop the rest. Unhashed candidates pass through silently
-    // (no false negatives). Drops bump the same rejected_duplicates
-    // counter — samples aren't recorded because the "matched" image is
-    // another suggestion the user is already seeing, no extra evidence
-    // to surface.
+    // visually redundant for the user. Sort by pixel area desc (the LoRA
+    // trainer benefits more from the higher-res take of the same scene)
+    // with tempered_delta as the tiebreaker (when resolutions match, fall
+    // back to the best identity score above median). Unhashed candidates
+    // pass through silently (no false negatives). Drops bump the same
+    // rejected_duplicates counter — samples aren't recorded because the
+    // "matched" image is another suggestion the user is already seeing,
+    // no extra evidence to surface.
     const interDeduped: SuggestionCandidate[] = [];
+    const interDedupedPacked: PackedHash[] = [];
+    const pixelArea = (c: SuggestionCandidate): number =>
+        (c.image_width ?? 0) * (c.image_height ?? 0);
     const sortedForInterDedup = [...dedupedCandidates].sort(
-        (a, b) => b.tempered_delta - a.tempered_delta
+        (a, b) =>
+            pixelArea(b) - pixelArea(a) ||
+            b.tempered_delta - a.tempered_delta
     );
     for (const c of sortedForInterDedup) {
-        if (!c.phash) {
+        const cPacked = candidatePacked.get(c);
+        if (!cPacked) {
             interDeduped.push(c);
             continue;
         }
         let dup = false;
-        for (const kept of interDeduped) {
-            if (!kept.phash) continue;
-            if (hashHamming(c.phash, kept.phash) <= DEDUP_HAMMING_THRESHOLD) {
+        for (const keptWords of interDedupedPacked) {
+            if (hashHammingPacked(cPacked, keptWords) <= DEDUP_HAMMING_THRESHOLD) {
                 dup = true;
                 break;
             }
@@ -524,6 +553,7 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
             rejected_duplicates++;
         } else {
             interDeduped.push(c);
+            interDedupedPacked.push(cPacked);
         }
     }
 

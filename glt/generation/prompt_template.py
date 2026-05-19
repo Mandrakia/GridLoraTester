@@ -101,7 +101,10 @@ def expand_prompts(
          falling back to square (1:1) when no AR tag was present.
     """
     mp = parse_resolution_mp(resolution)
-    target_area = int(round(mp * 1_000_000))
+    # "1 MP" by image-AI convention is 1024² = 1,048,576 px, not 10⁶.
+    # Keeps `1MP` at 1:1 → 1024×1024 after the SHAPE_MULTIPLE rounding
+    # (sqrt(10⁶)=1000 would round down to 992, surprising users).
+    target_area = int(round(mp * 1024 * 1024))
 
     out: list[ExpandedPrompt] = []
     for raw in prompts:

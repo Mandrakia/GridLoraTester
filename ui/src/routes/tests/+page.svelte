@@ -786,14 +786,17 @@
                             />
                             <span>Skip face scoring</span>
                         </label>
-                        <label class="col-span-2 flex items-center gap-2 text-xs">
+                        <label
+                            class="col-span-2 flex items-center gap-2 text-xs"
+                            title="Default behavior resumes the latest run when its config + prompts still match — new LoRAs in the folder are added without re-generating the older rows. Check this to disable resume and always start a fresh test_runs row."
+                        >
                             <input
                                 name="advanced.force"
                                 type="checkbox"
                                 bind:checked={f.force}
                                 class="h-4 w-4 rounded border-border bg-bg-1 text-accent"
                             />
-                            <span>Force regenerate (ignore existing images)</span>
+                            <span>Force fresh run (don't resume on new LoRAs)</span>
                         </label>
                     </div>
                 </details>

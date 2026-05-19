@@ -57,26 +57,53 @@ export async function computeImageHash(bytes: Buffer | Uint8Array): Promise<stri
     }
 }
 
-/** Hamming distance between two same-length hex hash strings. Returns
- * Infinity for any non-matching length (so a malformed hash is treated
- * as "never a dup"). Implementation chunks at 16 hex chars (64 bits) and
- * uses BigInt popcount — fast enough for ~1000 hash comparisons per
- * suggestion render. */
-export function hashHamming(a: string, b: string): number {
+/** Packed hash: a hex hash chopped into N × 32-bit words. Parse once with
+ * `parseHashPacked`, then compare with `hashHammingPacked` — avoids the
+ * BigInt parse/XOR/popcount overhead that dominated `hashHamming` on hot
+ * paths (suggestion dedup did 600k+ comparisons per page load). */
+export type PackedHash = Uint32Array;
+
+/** Parse a hex hash into 32-bit words. Returns null for malformed input
+ * (length not a multiple of 8 hex chars, or non-hex chars). */
+export function parseHashPacked(hex: string): PackedHash | null {
+    if (hex.length === 0 || (hex.length & 7) !== 0) return null;
+    const n = hex.length >>> 3;
+    const out = new Uint32Array(n);
+    for (let i = 0; i < n; i++) {
+        const v = parseInt(hex.slice(i * 8, i * 8 + 8), 16);
+        if (!Number.isFinite(v)) return null;
+        out[i] = v >>> 0;
+    }
+    return out;
+}
+
+/** SWAR popcount on a 32-bit unsigned int. Constant-time, no branches. */
+function popcount32(x: number): number {
+    x = x - ((x >>> 1) & 0x55555555);
+    x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+    x = (x + (x >>> 4)) & 0x0f0f0f0f;
+    return Math.imul(x, 0x01010101) >>> 24;
+}
+
+/** Hamming distance over two pre-parsed hashes. Returns Infinity if word
+ * counts differ. ~50-100× faster than the string/BigInt path. */
+export function hashHammingPacked(a: PackedHash, b: PackedHash): number {
     if (a.length !== b.length) return Infinity;
     let total = 0;
-    for (let i = 0; i < a.length; i += 16) {
-        const aa = BigInt('0x' + a.slice(i, i + 16));
-        const bb = BigInt('0x' + b.slice(i, i + 16));
-        let x = aa ^ bb;
-        while (x > 0n) {
-            // Brian Kernighan's popcount: clears the lowest set bit each
-            // iteration, so loop count = popcount, not bit width.
-            x &= x - 1n;
-            total++;
-        }
-    }
+    for (let i = 0; i < a.length; i++) total += popcount32(a[i] ^ b[i]);
     return total;
+}
+
+/** Hamming distance between two same-length hex hash strings. Convenience
+ * wrapper around the packed path — DO NOT use in tight loops, parse once
+ * with `parseHashPacked` and reuse. Returns Infinity on length mismatch
+ * or malformed input (so a bad hash is treated as "never a dup"). */
+export function hashHamming(a: string, b: string): number {
+    if (a.length !== b.length) return Infinity;
+    const pa = parseHashPacked(a);
+    const pb = parseHashPacked(b);
+    if (!pa || !pb) return Infinity;
+    return hashHammingPacked(pa, pb);
 }
 
 /** True iff the candidate's hash is within `DEDUP_HAMMING_THRESHOLD` of

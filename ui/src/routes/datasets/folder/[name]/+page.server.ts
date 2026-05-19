@@ -12,10 +12,12 @@ import {
 } from '$lib/server/centroids';
 import { suggestExternalPictures } from '$lib/server/connector-suggestions';
 import {
+    countActiveForFolders,
     listExcludedByFolder,
     markExcluded,
     restoreActive
 } from '$lib/server/dataset-images';
+import { defer } from '$lib/server/defer';
 import {
     loadFramingCoverage,
     loadPoseCalibration,
@@ -81,13 +83,9 @@ export const load: PageServerLoad = ({ params }) => {
     const max_size = getMaxSize('folder', folder);
     const pose_gaps = poseGroupGaps(pose_coverage, max_size);
     const framing_gaps = framingGroupGaps(framing_coverage, max_size);
-    const prune = suggestPruneCandidates({
-        folder_paths: [folder],
-        max_size,
-        pose_gaps,
-        framing_gaps,
-        centroid
-    });
+    // Header counter — cheap COUNT, kept sync so the page header renders
+    // with the live N / max immediately, no placeholder shuffle.
+    const n_active = countActiveForFolders([folder]);
     return {
         dataset: readDatasetDetail(folder),
         centroid,
@@ -95,26 +93,44 @@ export const load: PageServerLoad = ({ params }) => {
         framing_coverage,
         pose_calibration,
         max_size,
-        suggestions: suggestExternalPictures({
-            scope_kind: 'folder',
-            scope_key: folder,
-            centroid,
-            pose_overrides: {
-                threequarter: pose_calibration.offset_threequarter,
-                profile: pose_calibration.offset_profile,
-                tilted: pose_calibration.offset_tilted
-            },
-            pose_gaps,
-            framing_gaps
+        n_active,
+        // Streamed: SvelteKit flushes the rest of this payload first and
+        // resolves these in a continuation chunk. Heavy compute (pHash
+        // dedup, k-NN redundancy) no longer blocks the page render or
+        // sibling requests like /api/jobs?active=1.
+        suggestions: defer(() =>
+            suggestExternalPictures({
+                scope_kind: 'folder',
+                scope_key: folder,
+                centroid,
+                pose_overrides: {
+                    threequarter: pose_calibration.offset_threequarter,
+                    profile: pose_calibration.offset_profile,
+                    tilted: pose_calibration.offset_tilted
+                },
+                pose_gaps,
+                framing_gaps
+            })
+        ),
+        prune: defer(() => {
+            const p = suggestPruneCandidates({
+                folder_paths: [folder],
+                max_size,
+                pose_gaps,
+                framing_gaps,
+                centroid
+            });
+            return {
+                n_active: p.n_active,
+                max_size: p.max_size,
+                buckets: p.buckets.map((b) => ({
+                    ...b,
+                    candidates: b.candidates.map((c) =>
+                        decoratePruneForFolder(params.name, c)
+                    )
+                }))
+            };
         }),
-        prune: {
-            n_active: prune.n_active,
-            max_size: prune.max_size,
-            buckets: prune.buckets.map((b) => ({
-                ...b,
-                candidates: b.candidates.map((c) => decoratePruneForFolder(params.name, c))
-            }))
-        },
         excluded: listExcludedByFolder(folder).map((row) => ({
             image_path: row.image_path,
             filename: row.image_path.split('/').pop() ?? row.image_path,

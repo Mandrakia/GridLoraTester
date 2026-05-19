@@ -11,11 +11,13 @@ import {
 } from '$lib/server/centroids';
 import { suggestExternalPictures } from '$lib/server/connector-suggestions';
 import {
+    countActiveForFolders,
     listExcludedByFolder,
     markExcluded,
     restoreActive,
     type DatasetImageRow
 } from '$lib/server/dataset-images';
+import { defer } from '$lib/server/defer';
 import { getDatasetGroup } from '$lib/server/dataset-groups';
 import {
     loadFramingCoverage,
@@ -128,18 +130,24 @@ export const load: PageServerLoad = ({ params }) => {
             pose_coverage: ds_pose,
             framing_coverage: ds_framing,
             pose_calibration: ds_calib,
-            suggestions: suggestExternalPictures({
-                scope_kind: 'folder',
-                scope_key: detail.path,
-                centroid: ds_centroid,
-                pose_overrides: {
-                    threequarter: ds_calib.offset_threequarter,
-                    profile: ds_calib.offset_profile,
-                    tilted: ds_calib.offset_tilted
-                },
-                pose_gaps: poseGroupGaps(ds_pose, ds_max_size),
-                framing_gaps: framingGroupGaps(ds_framing, ds_max_size)
-            })
+            // Streamed: each member's suggestions resolves on its own I/O
+            // turn. With N members, the page renders with N placeholders
+            // and they fill in one by one — better perceived latency than
+            // a single N×130ms sync block.
+            suggestions: defer(() =>
+                suggestExternalPictures({
+                    scope_kind: 'folder',
+                    scope_key: detail.path,
+                    centroid: ds_centroid,
+                    pose_overrides: {
+                        threequarter: ds_calib.offset_threequarter,
+                        profile: ds_calib.offset_profile,
+                        tilted: ds_calib.offset_tilted
+                    },
+                    pose_gaps: poseGroupGaps(ds_pose, ds_max_size),
+                    framing_gaps: framingGroupGaps(ds_framing, ds_max_size)
+                })
+            )
         };
     });
 
@@ -178,13 +186,9 @@ export const load: PageServerLoad = ({ params }) => {
     const group_framing_gaps = framingGroupGaps(total_framing, max_size);
 
     const slugMap = buildSlugMap(group.paths);
-    const prune = suggestPruneCandidates({
-        folder_paths: group.paths,
-        max_size,
-        pose_gaps: group_pose_gaps,
-        framing_gaps: group_framing_gaps,
-        centroid: global_centroid
-    });
+    // Header counter — cheap COUNT across member folders. Kept sync so
+    // the "N / max" pill renders without a placeholder.
+    const n_active = countActiveForFolders(group.paths);
 
     // Excluded list spans every member folder.
     const excluded: ReturnType<typeof decorateExcludedForGroup>[] = [];
@@ -202,26 +206,42 @@ export const load: PageServerLoad = ({ params }) => {
         // member's winners — used in the "vs group" badge mode.
         group_pose_calibration,
         max_size,
-        group_suggestions: suggestExternalPictures({
-            scope_kind: 'group',
-            scope_key: String(id),
-            centroid: global_centroid,
-            pose_overrides: {
-                threequarter: group_pose_calibration.offset_threequarter,
-                profile: group_pose_calibration.offset_profile,
-                tilted: group_pose_calibration.offset_tilted
-            },
-            pose_gaps: group_pose_gaps,
-            framing_gaps: group_framing_gaps
+        n_active,
+        // Streamed: the group-level suggestion + prune compute is the
+        // heaviest block here (full pHash dedup across all members).
+        group_suggestions: defer(() =>
+            suggestExternalPictures({
+                scope_kind: 'group',
+                scope_key: String(id),
+                centroid: global_centroid,
+                pose_overrides: {
+                    threequarter: group_pose_calibration.offset_threequarter,
+                    profile: group_pose_calibration.offset_profile,
+                    tilted: group_pose_calibration.offset_tilted
+                },
+                pose_gaps: group_pose_gaps,
+                framing_gaps: group_framing_gaps
+            })
+        ),
+        prune: defer(() => {
+            const p = suggestPruneCandidates({
+                folder_paths: group.paths,
+                max_size,
+                pose_gaps: group_pose_gaps,
+                framing_gaps: group_framing_gaps,
+                centroid: global_centroid
+            });
+            return {
+                n_active: p.n_active,
+                max_size: p.max_size,
+                buckets: p.buckets.map((b) => ({
+                    ...b,
+                    candidates: b.candidates.map((c) =>
+                        decoratePruneForGroup(id, slugMap, c)
+                    )
+                }))
+            };
         }),
-        prune: {
-            n_active: prune.n_active,
-            max_size: prune.max_size,
-            buckets: prune.buckets.map((b) => ({
-                ...b,
-                candidates: b.candidates.map((c) => decoratePruneForGroup(id, slugMap, c))
-            }))
-        },
         excluded
     };
 };
