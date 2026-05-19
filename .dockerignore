@@ -1,0 +1,32 @@
+# Build context filter — keep the image small and avoid baking host state.
+.git
+.gitignore
+
+# Local Node + Python artifacts
+ui/node_modules
+ui/build
+ui/.svelte-kit
+ui/data
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.venv
+venv
+
+# Editor / OS
+.idea
+.vscode
+.DS_Store
+
+# Docs are not needed at runtime
+docs/screenshots
+
+# CI / agent metadata
+.claude
+.codex
+.agents
+
+# Local workspace from docker-compose
+glt-workspace
+glt-data
+glt-cache

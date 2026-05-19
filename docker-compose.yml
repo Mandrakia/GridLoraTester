@@ -1,0 +1,49 @@
+# GridLoraTester — docker-compose
+#
+# Default: a single `./glt-workspace` bind mounts everything under
+# /workspace inside the container. Subdirs are created on first run.
+#
+# Alternative (per-folder binds): comment the single bind below and
+# uncomment the block under "Per-folder binds". Useful when datasets
+# and LoRA outputs already live next to an ai-toolkit install or on a
+# NAS — each line maps one canonical host path onto its slot in
+# /workspace.
+
+services:
+  glt:
+    image: mandrakia/glt:latest
+    container_name: glt
+    ports:
+      - "3000:3000"
+    environment:
+      # Required for the first download of FLUX.2-Klein (gated repo).
+      HF_TOKEN: ${HF_TOKEN:-}
+      # Defaults already set inside the image; uncomment to override.
+      # PORT: "3000"
+      # GLT_DB_PATH: /workspace/data/glt.db
+      # GLT_TORCHINDUCTOR_CACHE_DIR: /workspace/cache/torchinductor
+      # GLT_INT8_CONVROT_CACHE_DIR: /workspace/cache/int8_convrot
+      # HF_HOME: /workspace/cache/hf
+    volumes:
+      # ── Single workspace bind (default) ─────────────────────────────
+      # One host directory holds everything. Container will populate
+      # datasets/, outputs/, grids/, data/, cache/ on first run.
+      - ./glt-workspace:/workspace
+
+      # ── Per-folder binds (alternative) ──────────────────────────────
+      # Comment the line above and uncomment the five lines below to
+      # point each slot at an existing host directory.
+      #
+      # - /path/to/ai-toolkit/datasets:/workspace/datasets   # dataset_root — root of dataset folders
+      # - /path/to/ai-toolkit/output:/workspace/outputs      # lora_root    — root of LoRA folders to test
+      # - /path/to/glt-grids:/workspace/grids                # tests_root   — grid-test outputs
+      # - ./glt-data:/workspace/data                         # glt.db (SQLite — DON'T lose this)
+      # - ./glt-cache:/workspace/cache                       # HF + torchinductor + int8_convrot caches
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

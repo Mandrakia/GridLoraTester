@@ -247,6 +247,140 @@ backend, scheduler shift, debug tensor dumps, etc.).
 
 ---
 
+## Quick start — Docker
+
+The fastest way to try GridLoraTester is the prebuilt image. It bundles
+the Python CLI, the SvelteKit dashboard built for production, and a
+CUDA 13 runtime tuned for Ampere / Ada / Blackwell GPUs.
+
+```bash
+docker pull mandrakia/glt:latest
+```
+
+### Workspace layout
+
+Everything stateful lives under `/workspace` inside the container. Four
+subdirectories matter — the entrypoint preseeds them into the
+dashboard's settings table on first boot, so you can map them wherever
+you like on the host:
+
+| Path in container | Setting it preseeds | What goes here |
+|---|---|---|
+| `/workspace/datasets` | `dataset_root` | **Root of dataset folders.** One subfolder per dataset (one character / subject = one folder of photos). Typically the same directory your trainer reads from — e.g. `ai-toolkit/datasets/`. |
+| `/workspace/outputs` | `lora_root` | **Root of LoRA folders.** One subfolder per training run, each holding the `.safetensors` checkpoints to test. Point this at your trainer's output dir — e.g. `ai-toolkit/output/`. |
+| `/workspace/grids` | `tests_root` | Grid-test results land here, one subfolder per run (HTML report + generated images). |
+| `/workspace/data` | — | `glt.db` SQLite database. **Don't lose this** — it stores your test history, dataset curation state, connector credentials, and groups. |
+| `/workspace/cache` | — | Hugging Face downloads (`hf/`), `torchinductor` compile cache, INT8 ConvRot cache. Reclaimable, but worth keeping: avoids multi-GB redownloads and skips ~90 s compile warmup on subsequent runs. |
+
+On first boot the entrypoint seeds the `settings` table with the four
+paths above via `INSERT OR IGNORE`. Anything you later change in the
+**Settings** page is preserved — the seed never overwrites.
+
+### Option A — single bind (simplest)
+
+Put everything under one host directory. Good for a clean install
+where the workspace is owned by glt:
+
+```bash
+docker run --gpus all -p 3000:3000 \
+    -v /host/glt-workspace:/workspace \
+    -e HF_TOKEN=hf_xxx \
+    mandrakia/glt:latest
+```
+
+The container creates `datasets/`, `outputs/`, `grids/`, `data/`, and
+`cache/` inside `/host/glt-workspace/` on first run.
+
+### Option B — per-folder binds (point at existing dirs)
+
+When your datasets and LoRA outputs already live somewhere canonical
+on the host (next to an ai-toolkit install, on a NAS, …), mount each
+target separately. Each `-v` overrides only its slice of `/workspace`:
+
+```bash
+docker run --gpus all -p 3000:3000 \
+    -v /home/me/ai-toolkit/datasets:/workspace/datasets \
+    -v /home/me/ai-toolkit/output:/workspace/outputs \
+    -v /home/me/glt-grids:/workspace/grids \
+    -v /home/me/glt-data:/workspace/data \
+    -v /home/me/glt-cache:/workspace/cache \
+    -e HF_TOKEN=hf_xxx \
+    mandrakia/glt:latest
+```
+
+Anything you skip falls back to the container's internal directory
+(transient — wiped when the container is removed). At minimum, bind
+`/workspace/data` so the DB survives.
+
+Open <http://localhost:3000>. The dashboard reads its settings from
+the SQLite DB inside the bound `/workspace/data`, so customisation
+survives container restarts.
+
+### docker-compose
+
+For a reproducible setup, use the [`docker-compose.yml`](./docker-compose.yml)
+at the repo root:
+
+```bash
+HF_TOKEN=hf_xxx docker compose up
+```
+
+The default config binds a single `./glt-workspace` directory next to
+the compose file. The per-folder bind block is included **commented
+out** — uncomment it (and comment the single bind) when you want to
+point at existing host paths.
+
+### Environment variables
+
+| Variable | Default | Use |
+|---|---|---|
+| `HF_TOKEN` | — | Hugging Face token. FLUX.2-Klein is a gated repo; required on first download. |
+| `PORT` / `HOST` | `3000` / `0.0.0.0` | Dashboard listening port and bind address inside the container. |
+| `GLT_DB_PATH` | `/workspace/data/glt.db` | Override only if you want the DB outside `/workspace`. |
+| `GLT_TORCHINDUCTOR_CACHE_DIR` | `/workspace/cache/torchinductor` | `torch.compile` Inductor cache. Persisting it cuts the cold-start tax by ~3.2× per shape. |
+| `GLT_INT8_CONVROT_CACHE_DIR` | `/workspace/cache/int8_convrot` | Cached INT8-quantized transformer weights (~9 GB for Klein 9B). Skips ~25 s cold-quant on every Python launch. |
+| `HF_HOME` | `/workspace/cache/hf` | Hugging Face model + dataset cache root. |
+| `HF_XET_HIGH_PERFORMANCE` | `1` | Use Xet (HF's new high-throughput backend) for large downloads. Replaces the deprecated `HF_HUB_ENABLE_HF_TRANSFER`. |
+
+### Build from source
+
+The image is built from the [`Dockerfile`](./Dockerfile) at the repo
+root. Useful when you want a different PyTorch version, a stricter ORT
+pin, or SageAttention compiled in:
+
+```bash
+docker build \
+    --build-arg TORCH_CUDA_ARCH_LIST="8.6;8.9;12.0" \
+    --build-arg BUILD_SAGE=1 \
+    --build-arg ORT_VERSION=1.27.0.dev20260511001 \
+    -t glt:dev .
+```
+
+| ARG | Default | Notes |
+|---|---|---|
+| `CUDA_IMAGE` | `nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04` | Swap to `…-runtime-ubuntu24.04` for a smaller image if you don't need `nvcc`. |
+| `PYTHON_VERSION` | `3.12` | Matches the CUDA 13 + torch 2.11 reference stack the project was validated against. |
+| `NODE_VERSION` | `24` | `better-sqlite3` and `sharp` ship prebuilt binaries for Node 24. |
+| `TORCH_VERSION` | `2.11.0` | Resolved against the `https://download.pytorch.org/whl/cu130` wheel index. |
+| `ORT_VERSION` | `1.27.0.dev0` | Lower bound. Only pre-releases of 1.27 exist on the Azure nightly feed — pin a specific dev date for reproducible builds. |
+| `TORCH_CUDA_ARCH_LIST` | `8.0;8.6;8.9` | Ampere (A100/3090) + Ada (4090/L40) by default. Add `12.0` for Blackwell. |
+| `BUILD_SAGE` | `0` | Set to `1` to compile SageAttention 2.x from source (~10–15 min). Note: `int8_convrot` doesn't need it; Sage benches *negative* on Ampere — only worth it on Ada/Hopper. |
+
+### Notes
+
+- The container needs the NVIDIA Container Toolkit on the host
+  (`--gpus all` requires it). On Linux, `apt install nvidia-container-toolkit`
+  + `nvidia-ctk runtime configure --runtime=docker` + restart Docker.
+- Inside the container, the Python interpreter is at
+  `/opt/glt-venv/bin/python` — that's what `settings.python_bin` is
+  preseeded to. The dashboard spawns the Python worker via this path.
+- First run takes longer than steady state: HF download of FLUX.2-Klein
+  (~17 GB transformer + Qwen3 text encoder), then a ~25 s cold-quant
+  pass for `int8_convrot`. Both results land in `/workspace/cache/` so
+  subsequent runs are warm.
+
+---
+
 ## Install & setup
 
 **Requirements**
