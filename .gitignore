@@ -21,14 +21,13 @@ env/
 #Claude settings
 CLAUDE.md
 .claude
+.codex
 # Local caches
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 
 # Generated outputs (default working dirs)
-output/
-output_*/
 *.log
 
 # Local config + secrets
