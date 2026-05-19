@@ -100,6 +100,13 @@
                         {savingMaxSize ? '…' : 'Save'}
                     </button>
                 </form>
+                <a
+                    href="/datasets/folder/{encodeURIComponent(data.dataset.name)}/export"
+                    class="btn btn-secondary px-3 py-1 text-xs"
+                    title="Download a zip of every active image in this dataset + its caption sidecar"
+                >
+                    Export zip
+                </a>
             </div>
         </div>
 

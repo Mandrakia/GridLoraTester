@@ -17,7 +17,10 @@ env/
 .idea/
 *.swp
 *~
+
+#Claude settings
 CLAUDE.md
+.claude
 # Local caches
 .pytest_cache/
 .ruff_cache/

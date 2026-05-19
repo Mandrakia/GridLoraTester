@@ -177,6 +177,13 @@
                         {savingMaxSize ? '…' : 'Save'}
                     </button>
                 </form>
+                <a
+                    href="/datasets/group/{data.group.id}/export"
+                    class="btn btn-secondary px-3 py-1 text-xs"
+                    title="Download a zip of every member dataset, one subfolder per member, with caption sidecars"
+                >
+                    Export zip
+                </a>
             </div>
         </div>
 
