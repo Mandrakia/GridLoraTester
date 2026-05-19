@@ -4,6 +4,7 @@ import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { buildFolderZip, safeZipFilename } from '$lib/server/dataset-export';
+import { isPathInside } from '$lib/server/path-utils';
 import { getSettings } from '$lib/server/settings';
 
 import type { RequestHandler } from './$types';
@@ -13,7 +14,7 @@ function resolveFolder(name: string): string {
     if (!dataset_root) throw error(404, 'dataset_root not configured');
     const root = resolve(dataset_root);
     const folder = resolve(root, name);
-    if (folder !== root && !folder.startsWith(root + '/')) throw error(403, 'Forbidden');
+    if (!isPathInside(root, folder)) throw error(403, 'Forbidden');
     try {
         if (!statSync(folder).isDirectory()) throw error(404, 'Not a directory');
     } catch {

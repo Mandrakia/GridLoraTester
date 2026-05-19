@@ -1,6 +1,7 @@
 <script lang="ts">
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
+    import { pathBasename } from '$lib/path-display';
     import MainPanel from '$lib/components/MainPanel.svelte';
     import type { ActionData, PageData } from './$types';
 
@@ -228,7 +229,7 @@
                                 class="px-4 py-2.5 align-top font-mono text-xs text-fg-muted"
                                 title={t.lora_path}
                             >
-                                {t.lora_path.split('/').pop()}
+                                {pathBasename(t.lora_path)}
                             </td>
                             <td
                                 class="px-4 py-2.5 align-top text-xs text-fg-muted"

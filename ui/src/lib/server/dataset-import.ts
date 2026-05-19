@@ -9,7 +9,7 @@
 //      new on-disk path (FK enforces dataset_images was inserted first)
 //   5. Re-derive the folder's centroid + per-row similarity
 import { existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { extname, join, resolve, sep } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 
 import type { ConnectorId } from '$lib/connectors/types';
 import {
@@ -25,6 +25,7 @@ import {
     upsertImported
 } from './dataset-images';
 import { db } from './db';
+import { isPathInside } from './path-utils';
 
 const insertFaceStmt = db.prepare(`
     INSERT INTO face_embeddings(
@@ -217,21 +218,24 @@ export async function addPictureToDataset(input: ImportInput): Promise<ImportRes
     // Defense in depth: even with safeFilename + nonCollidingPath, assert
     // the final resolved path lives under the target folder. Catches any
     // future regression in the filename sanitizer.
-    if (dest !== targetFolder && !dest.startsWith(targetFolder + sep)) {
+    if (!isPathInside(targetFolder, dest)) {
         throw new Error(`Refusing to write outside target folder: ${dest}`);
     }
 
     mkdirSync(targetFolder, { recursive: true });
 
-    // Write to a .tmp sibling first; rename only after the DB transaction
-    // commits. Avoids leaving an orphaned image on disk if the tx throws
-    // (e.g. on a UNIQUE constraint or a bad embedding).
+    // Write to a .tmp sibling first; only commit DB rows after the final
+    // destination exists. If the DB transaction throws, delete the new file.
+    // This prioritizes avoiding DB rows that point at a missing image.
     const tmp = dest + '.tmp';
     writeFileSync(tmp, bytes, { flag: 'wx' });
 
+    let moved = false;
     try {
+        renameSync(tmp, dest);
+        moved = true;
         // dataset_images first (FK target), THEN face rows. Single tx so a
-        // failure leaves no orphan. Phash + dims carried over from the
+        // DB failure leaves no committed rows. Phash + dims carried over from the
         // connector record — no need to wait for compute-image-hashes to
         // backfill, the imported file participates in dedup immediately.
         db.transaction(() => {
@@ -256,11 +260,10 @@ export async function addPictureToDataset(input: ImportInput): Promise<ImportRes
                 });
             }
         })();
-        renameSync(tmp, dest);
     } catch (e) {
         // Best-effort cleanup — don't shadow the original error.
         try {
-            unlinkSync(tmp);
+            unlinkSync(moved ? dest : tmp);
         } catch {
             // ignore
         }

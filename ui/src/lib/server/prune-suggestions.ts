@@ -28,6 +28,7 @@ import { decodeEmbedding, dot } from './centroid-math';
 import type { CentroidRow } from './centroids';
 import { countActiveForFolders } from './dataset-images';
 import { db } from './db';
+import { pathBasename } from './path-utils';
 
 /** Top candidates surfaced per over-rep bucket. Mirror of SUGGESTION_TOP_N. */
 const PRUNE_TOP_N = 12;
@@ -212,7 +213,7 @@ function rankByRedundancy(bucket: ClassifiedImage[]): Map<string, RankResult> {
             return {
                 image_path: peer.image_path,
                 folder_path: peer.folder_path,
-                filename: peer.image_path.split('/').pop() ?? peer.image_path,
+                filename: pathBasename(peer.image_path),
                 similarity: p.sim
             };
         });
@@ -271,7 +272,7 @@ export function suggestPruneCandidates(input: PruneInput): PruneResult {
         return {
             image_path: img.image_path,
             folder_path: img.folder_path,
-            filename: img.image_path.split('/').pop() ?? img.image_path,
+            filename: pathBasename(img.image_path),
             pose_bucket: img.pose_bucket,
             framing_bucket: img.framing_bucket,
             similarity: img.similarity,

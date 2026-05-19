@@ -20,25 +20,25 @@
             key: 'dataset_root',
             label: 'Dataset folder',
             hint: 'Where your training datasets live. Each subfolder shows up as one dataset.',
-            placeholder: '/home/you/datasets'
+            placeholder: '/path/to/datasets or D:\\datasets'
         },
         {
             key: 'tests_root',
             label: 'Tests folder',
             hint: 'Where grid test results are written. Each run gets its own subfolder.',
-            placeholder: '/home/you/glt-tests'
+            placeholder: '/path/to/glt-tests or D:\\glt-tests'
         },
         {
             key: 'lora_root',
             label: 'LoRA folder',
             hint: 'Where your LoRA training output lives. Each subfolder is one family.',
-            placeholder: '/home/you/loras'
+            placeholder: '/path/to/loras or D:\\loras'
         },
         {
             key: 'python_bin',
             label: 'Python interpreter',
             hint: 'Path to the Python that runs inference. Usually the .venv at the repo root.',
-            placeholder: '/home/you/GridLoraTester/.venv/bin/python'
+            placeholder: '/path/to/.venv/bin/python or C:\\path\\to\\.venv\\Scripts\\python.exe'
         }
     ];
 

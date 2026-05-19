@@ -12,6 +12,7 @@ import { error, json } from '@sveltejs/kit';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { getAllowedRoots } from '$lib/server/fs-roots';
+import { isPathInside } from '$lib/server/path-utils';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url }) => {
@@ -26,7 +27,7 @@ export const GET: RequestHandler = async ({ url }) => {
     }
 
     const targetAbs = rawTarget ? path.resolve(rawTarget) : rootAbs;
-    if (targetAbs !== rootAbs && !targetAbs.startsWith(rootAbs + path.sep)) {
+    if (!isPathInside(rootAbs, targetAbs)) {
         error(403, 'path escapes root');
     }
 
@@ -34,23 +35,31 @@ export const GET: RequestHandler = async ({ url }) => {
     try {
         raw = await readdir(targetAbs, { withFileTypes: true });
     } catch (e) {
-        error(500, (e as Error).message);
+        const err = e as NodeJS.ErrnoException;
+        if ((err.code === 'EPERM' || err.code === 'EACCES') && process.platform === 'darwin') {
+            error(
+                500,
+                `${err.message}. macOS may be blocking Terminal/Node from this folder; grant Full Disk Access or choose another folder.`
+            );
+        }
+        error(500, err.message);
     }
 
-    const folders: { name: string; isHidden: boolean }[] = [];
+    const folders: { name: string; path: string; isHidden: boolean }[] = [];
     await Promise.all(
         raw.map(async (e) => {
+            const childPath = path.join(targetAbs, e.name);
             let isDir = e.isDirectory();
             if (!isDir && e.isSymbolicLink()) {
                 try {
-                    const s = await stat(path.join(targetAbs, e.name));
+                    const s = await stat(childPath);
                     isDir = s.isDirectory();
                 } catch {
                     // dangling symlink — skip
                 }
             }
             if (isDir) {
-                folders.push({ name: e.name, isHidden: e.name.startsWith('.') });
+                folders.push({ name: e.name, path: childPath, isHidden: e.name.startsWith('.') });
             }
         })
     );
@@ -63,6 +72,7 @@ export const GET: RequestHandler = async ({ url }) => {
         root: rootAbs,
         path: targetAbs,
         parent,
+        separator: path.sep,
         entries: folders
     });
 };

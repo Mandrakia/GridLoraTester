@@ -12,6 +12,7 @@ import { basename, resolve } from 'node:path';
 
 import { getDatasetGroup } from '$lib/server/dataset-groups';
 import { mimeFor } from '$lib/server/mime';
+import { isPathInside } from '$lib/server/path-utils';
 import { bufferToBytes, clampWidth, getThumbnail } from '$lib/server/thumbs';
 
 export const GET: RequestHandler = async ({ params, url }) => {
@@ -44,7 +45,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 
     const folder = resolve(matchedPath);
     const target = resolve(folder, rest.join('/'));
-    if (target !== folder && !target.startsWith(folder + '/')) throw error(403, 'Forbidden');
+    if (!isPathInside(folder, target)) throw error(403, 'Forbidden');
 
     try {
         if (!statSync(target).isFile()) throw error(404);

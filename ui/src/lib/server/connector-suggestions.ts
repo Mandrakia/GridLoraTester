@@ -36,6 +36,7 @@ import {
     parseHashPacked,
     type PackedHash
 } from './image-hash';
+import { pathBasename } from './path-utils';
 import { getSettings } from './settings';
 
 /** Tolerance band: a non-target face whose bbox area falls within this
@@ -501,9 +502,7 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
                         ...c,
                         dedup_match: {
                             dataset_path: match.dataset_path,
-                            dataset_basename:
-                                match.dataset_path.split('/').filter(Boolean).pop() ??
-                                match.dataset_path,
+                            dataset_basename: pathBasename(match.dataset_path),
                             hamming: match.hamming
                         }
                     });

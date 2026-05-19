@@ -7,8 +7,7 @@
 // conventional mount-point bases when they actually exist on disk:
 //   - Linux: /mnt, /media
 //   - macOS: /Volumes
-//   - Windows: nothing for now — drive letters need a different model;
-//     users can still type a path manually in the calling form.
+//   - Windows: existing drive roots (C:\, D:\, …)
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 
@@ -21,9 +20,17 @@ export function getAllowedRoots(): AllowedRoot[] {
     const out: AllowedRoot[] = [{ label: 'Home', path: homedir() }];
     const plat = platform();
     const candidates: string[] =
-        plat === 'darwin' ? ['/Volumes'] : plat === 'linux' ? ['/mnt', '/media'] : [];
+        plat === 'darwin'
+            ? ['/Volumes']
+            : plat === 'linux'
+              ? ['/mnt', '/media']
+              : plat === 'win32'
+                ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((d) => `${d}:\\`)
+                : [];
     for (const p of candidates) {
-        if (existsSync(p)) out.push({ label: p, path: p });
+        if (existsSync(p) && !out.some((r) => r.path.toLowerCase() === p.toLowerCase())) {
+            out.push({ label: p, path: p });
+        }
     }
     return out;
 }

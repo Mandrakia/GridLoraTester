@@ -13,21 +13,14 @@ import { extname, join, resolve } from 'node:path';
 import type { ConnectorPicture, ListPicturesPage } from '$lib/connectors/types';
 import { db } from '../db';
 import { mimeFor } from '../mime';
+import { isPathInsideAnyRoot } from '../path-utils';
 import { bufferToBytes } from '../thumbs';
 
 export const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp']);
 
-/** True when `target` lives inside (or equals) any of the roots. Both
- * sides are `path.resolve`'d so trailing slashes / relatives don't fool
- * the prefix check. */
+/** True when `target` lives inside (or equals) any of the roots. */
 export function isInsideAnyRoot(target: string, roots: string[]): boolean {
-    const abs = resolve(target);
-    for (const r of roots) {
-        const root = resolve(r);
-        if (abs === root) return true;
-        if (abs.startsWith(root + '/')) return true;
-    }
-    return false;
+    return isPathInsideAnyRoot(target, roots);
 }
 
 /** SQL helper: every `person_id` that's currently linked under one of the

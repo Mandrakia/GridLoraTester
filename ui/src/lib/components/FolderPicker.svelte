@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { isSameOrInsidePathString } from '$lib/path-display';
+
     // Modal folder picker. Server-side cage: every list request names one
     // of the server's allowed roots (see /api/fs/roots), and the server
     // rejects any path that would escape it. The caller passes the full
@@ -12,12 +14,14 @@
     }
     interface Entry {
         name: string;
+        path: string;
         isHidden: boolean;
     }
     interface ListResponse {
         root: string;
         path: string;
         parent: string | null;
+        separator?: string;
         entries: Entry[];
     }
 
@@ -38,12 +42,13 @@
     let currentPath = $state('');
     let parent = $state<string | null>(null);
     let entries = $state<Entry[]>([]);
+    let separator = $state('/');
     let loading = $state(false);
     let loadError = $state<string | null>(null);
 
     function rootContaining(p: string): Root | null {
         for (const r of roots) {
-            if (p === r.path || p.startsWith(r.path + '/')) return r;
+            if (isSameOrInsidePathString(r.path, p)) return r;
         }
         return null;
     }
@@ -69,6 +74,7 @@
             activeRoot = body.root;
             currentPath = body.path;
             parent = body.parent;
+            separator = body.separator ?? (body.path.includes('\\') ? '\\' : '/');
             entries = body.entries;
         } catch (e) {
             loadError = (e as Error).message;
@@ -96,20 +102,19 @@
         const activeLabel = roots.find((r) => r.path === activeRoot)?.label ?? activeRoot;
         list.push({ label: activeLabel, path: activeRoot });
         if (currentPath === activeRoot) return list;
-        if (!currentPath.startsWith(activeRoot)) return list;
-        const rel = currentPath.slice(activeRoot.length).replace(/^\/+/, '');
-        let acc = activeRoot.endsWith('/') ? activeRoot.slice(0, -1) : activeRoot;
-        for (const seg of rel.split('/')) {
+        if (!isSameOrInsidePathString(activeRoot, currentPath)) return list;
+        const rel = currentPath.slice(activeRoot.length).replace(/^[\\/]+/, '');
+        let acc = activeRoot.replace(/[\\/]+$/, '');
+        for (const seg of rel.split(/[\\/]+/)) {
             if (!seg) continue;
-            acc = `${acc}/${seg}`;
+            acc = `${acc}${separator}${seg}`;
             list.push({ label: seg, path: acc });
         }
         return list;
     });
 
-    function enter(name: string) {
-        const sep = currentPath.endsWith('/') ? '' : '/';
-        load(activeRoot, `${currentPath}${sep}${name}`);
+    function enter(entry: Entry) {
+        load(activeRoot, entry.path);
     }
 
     function up() {
@@ -244,7 +249,7 @@
                                 class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-bg-2 {e.isHidden
                                     ? 'opacity-50'
                                     : ''}"
-                                onclick={() => enter(e.name)}
+                                onclick={() => enter(e)}
                                 title={e.isHidden ? 'Hidden folder' : ''}
                             >
                                 <svg

@@ -1,6 +1,6 @@
 import type { Actions, PageServerLoad } from './$types';
 import { error, fail } from '@sveltejs/kit';
-import { basename, resolve } from 'node:path';
+import { basename } from 'node:path';
 
 import { framingGroupGaps, poseGroupGaps } from '$lib/dataset-targets';
 import {
@@ -27,6 +27,7 @@ import {
 } from '$lib/server/dataset-detail';
 import { getMaxSize, setMaxSize } from '$lib/server/dataset-size-limits';
 import { enqueue } from '$lib/server/jobs';
+import { isPathInside, pathBasename } from '$lib/server/path-utils';
 import { suggestPruneCandidates, type PruneCandidate } from '$lib/server/prune-suggestions';
 
 function resolveGroup(rawId: string) {
@@ -79,7 +80,7 @@ function decorateExcludedForGroup(
     slugMap: Map<string, string>,
     row: DatasetImageRow
 ) {
-    const filename = row.image_path.split('/').pop() ?? row.image_path;
+    const filename = pathBasename(row.image_path);
     const slug = slugMap.get(row.folder_path) ?? basename(row.folder_path);
     return {
         image_path: row.image_path,
@@ -93,10 +94,8 @@ function decorateExcludedForGroup(
 }
 
 function assertUnderGroupMember(group: { paths: string[] }, imagePath: string): void {
-    const resolved = resolve(imagePath);
     for (const p of group.paths) {
-        const member = resolve(p);
-        if (resolved === member || resolved.startsWith(member + '/')) return;
+        if (isPathInside(p, imagePath)) return;
     }
     throw error(403, 'image_path is not under any member of this group');
 }
@@ -319,8 +318,7 @@ export const actions: Actions = {
             return fail(403, { error: (e as Error).message });
         }
         const member = group.paths.find((p) => {
-            const r = resolve(imagePath);
-            return r === resolve(p) || r.startsWith(resolve(p) + '/');
+            return isPathInside(p, imagePath);
         });
         if (!member) return fail(403, { error: 'image_path is not under any member' });
         markExcluded(imagePath, reason);
@@ -338,8 +336,7 @@ export const actions: Actions = {
             return fail(403, { error: (e as Error).message });
         }
         const member = group.paths.find((p) => {
-            const r = resolve(imagePath);
-            return r === resolve(p) || r.startsWith(resolve(p) + '/');
+            return isPathInside(p, imagePath);
         });
         if (!member) return fail(403, { error: 'image_path is not under any member' });
         restoreActive(imagePath);

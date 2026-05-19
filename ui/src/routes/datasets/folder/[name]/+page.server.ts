@@ -27,6 +27,7 @@ import {
 import { findGroupsContaining } from '$lib/server/dataset-groups';
 import { getMaxSize, setMaxSize } from '$lib/server/dataset-size-limits';
 import { enqueue } from '$lib/server/jobs';
+import { isPathInside, pathBasename } from '$lib/server/path-utils';
 import { suggestPruneCandidates, type PruneCandidate } from '$lib/server/prune-suggestions';
 import { getSettings } from '$lib/server/settings';
 
@@ -35,7 +36,7 @@ function resolveFolder(name: string): string {
     if (!dataset_root) throw error(404, 'dataset_root not configured');
     const root = resolve(dataset_root);
     const folder = resolve(root, name);
-    if (folder !== root && !folder.startsWith(root + '/')) throw error(403, 'Forbidden');
+    if (!isPathInside(root, folder)) throw error(403, 'Forbidden');
     try {
         if (!statSync(folder).isDirectory()) throw error(404, 'Not a directory');
     } catch {
@@ -68,8 +69,7 @@ function decoratePruneForFolder(name: string, c: PruneCandidate) {
  * the markExcluded / restoreActive actions against IDs from a different
  * dataset being passed through this scope's action endpoint. */
 function assertUnderFolder(folder: string, imagePath: string): void {
-    const resolved = resolve(imagePath);
-    if (resolved !== folder && !resolved.startsWith(folder + '/')) {
+    if (!isPathInside(folder, imagePath)) {
         throw error(403, 'image_path is not under this folder');
     }
 }
@@ -133,11 +133,11 @@ export const load: PageServerLoad = ({ params }) => {
         }),
         excluded: listExcludedByFolder(folder).map((row) => ({
             image_path: row.image_path,
-            filename: row.image_path.split('/').pop() ?? row.image_path,
+            filename: pathBasename(row.image_path),
             excluded_at: row.excluded_at,
             excluded_reason: row.excluded_reason,
             thumbnail_url: `/datasets/folder/${encodeURIComponent(params.name)}/raw/${encodeURIComponent(
-                row.image_path.split('/').pop() ?? ''
+                pathBasename(row.image_path)
             )}?w=400`
         }))
     };

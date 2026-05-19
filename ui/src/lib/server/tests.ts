@@ -17,6 +17,7 @@ import { basename } from 'node:path';
 import { db } from './db';
 import { getDatasetGroup } from './dataset-groups';
 import { listLoraSafetensorNames, parseStep } from './loras';
+import { pathBasename } from './path-utils';
 import { getPromptSet } from './prompts';
 
 export type TestStatus =
@@ -253,7 +254,7 @@ function decorate(t: Test): TestRow {
         }
     } else if (t.prompts_path) {
         prompt_count = countLines(t.prompts_path);
-        prompts_label = t.prompts_path.split('/').pop() || t.prompts_path;
+        prompts_label = pathBasename(t.prompts_path);
     }
 
     let images_generated = 0;

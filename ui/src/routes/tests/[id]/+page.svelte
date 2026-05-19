@@ -1,6 +1,7 @@
 <script lang="ts">
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
+    import { pathBasename } from '$lib/path-display';
     import MainPanel from '$lib/components/MainPanel.svelte';
     import type { PageData } from './$types';
 
@@ -611,7 +612,7 @@
                         {#if data.test.trigger}
                             · trigger <span class="font-mono">{data.test.trigger}</span>
                         {/if}
-                        · lora <span class="font-mono">{data.test.lora_path.split('/').pop()}</span>
+                        · lora <span class="font-mono">{pathBasename(data.test.lora_path)}</span>
                         {#if data.runs.length > 0}
                             · {data.runs.length} run{data.runs.length === 1 ? '' : 's'} in history
                         {/if}

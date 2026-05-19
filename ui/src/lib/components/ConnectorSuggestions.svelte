@@ -6,6 +6,7 @@
     // Each tile has an "Add to dataset" button that pulls the file in and
     // recomputes the centroid in-place.
     import { invalidateAll } from '$app/navigation';
+    import { pathBasename } from '$lib/path-display';
 
     interface SuggestionCandidate {
         connector_id: string;
@@ -89,10 +90,6 @@
         }
     });
 
-    function basename(p: string): string {
-        return p.split('/').filter(Boolean).pop() ?? p;
-    }
-
     async function addToDataset(c: SuggestionCandidate) {
         if (!targetFolder) {
             addError = 'No target folder available.';
@@ -173,7 +170,7 @@
                 <span>Add to</span>
                 <select bind:value={targetFolder} class="input font-mono text-xs">
                     {#each target_folders as f (f)}
-                        <option value={f}>{basename(f)}</option>
+                        <option value={f}>{pathBasename(f)}</option>
                     {/each}
                 </select>
             </label>

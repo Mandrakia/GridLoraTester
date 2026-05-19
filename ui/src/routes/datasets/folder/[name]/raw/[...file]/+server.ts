@@ -8,6 +8,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { mimeFor } from '$lib/server/mime';
+import { isPathInside } from '$lib/server/path-utils';
 import { getSettings } from '$lib/server/settings';
 import { bufferToBytes, clampWidth, getThumbnail } from '$lib/server/thumbs';
 
@@ -17,10 +18,10 @@ export const GET: RequestHandler = async ({ params, url }) => {
 
     const root = resolve(dataset_root);
     const folder = resolve(root, params.name);
-    if (folder !== root && !folder.startsWith(root + '/')) throw error(403, 'Forbidden');
+    if (!isPathInside(root, folder)) throw error(403, 'Forbidden');
 
     const target = resolve(folder, params.file || '');
-    if (target !== folder && !target.startsWith(folder + '/')) throw error(403, 'Forbidden');
+    if (!isPathInside(folder, target)) throw error(403, 'Forbidden');
 
     try {
         if (!statSync(target).isFile()) throw error(404);

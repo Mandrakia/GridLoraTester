@@ -7,6 +7,7 @@
     import { enhance } from '$app/forms';
     import { invalidateAll } from '$app/navigation';
     import FolderPicker from '$lib/components/FolderPicker.svelte';
+    import { pathBasename } from '$lib/path-display';
     import type {
         ConnectorPerson,
         ConnectorStatus,
@@ -379,7 +380,7 @@
         const kind = linkerKindFor(c.id);
         if (kind === 'folder') {
             const path = link.person_id;
-            return path.split('/').filter(Boolean).pop() ?? path;
+            return pathBasename(path);
         }
         if (kind === 'picker') {
             const n = link.last_sync_count ?? 0;
@@ -658,7 +659,7 @@
                     <input
                         type="hidden"
                         name="person_name"
-                        value={folderPath ? folderPath.split('/').pop() ?? folderPath : ''}
+                        value={folderPath ? pathBasename(folderPath) : ''}
                     />
                     <label for="hd-folder-{c.id}" class="block text-sm font-medium"
                         >Folder path</label
@@ -668,7 +669,7 @@
                             id="hd-folder-{c.id}"
                             type="text"
                             bind:value={folderPath}
-                            placeholder="/home/you/photos/some-person"
+                            placeholder="/path/to/photos/some-person or D:\photos\some-person"
                             class="input flex-1 font-mono"
                             autocomplete="off"
                             spellcheck="false"
