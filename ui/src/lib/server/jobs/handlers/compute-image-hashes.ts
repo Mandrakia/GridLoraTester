@@ -18,13 +18,10 @@
 // dataset, no point computing dedup material for them.
 import { readFileSync } from 'node:fs';
 import type { ConnectorId } from '$lib/connectors/types';
-import { poseSimOffset } from '$lib/centroid-thresholds';
-import { SUGGESTION_DELTA_MIN } from '$lib/dataset-targets';
 import { decodeEmbedding, dot } from '../../centroid-math';
 import { getCentroid } from '../../centroids';
 import { getConnector } from '../../connectors/registry';
 import { updatePhash } from '../../dataset-images';
-import { loadPoseCalibration } from '../../dataset-detail';
 import { db } from '../../db';
 import { computeImageHash } from '../../image-hash';
 import { getSettings } from '../../settings';
@@ -118,16 +115,15 @@ const handler: JobHandler = async (ctx: JobContext) => {
     // ===== Phase 2: connector pictures linked to this scope =====
     //
     // Pre-filter pass: we only hash pictures that COULD ever surface as a
-    // suggestion. Hashing all 7k+ pictures from a person's library when
-    // only ~200 will ever appear as candidates is wasteful (download +
-    // Sharp + DB write cost ×35). The qualifying floor mirrors the
-    // suggestion engine's own:
+    // suggestion. Hashing every picture from a person's library when many
+    // will never appear as candidates is wasteful (download + Sharp + DB
+    // write cost). The qualifying floor mirrors the suggestion engine's own:
     //   1. Resolution: image_width × image_height ≥ min_image_mp
-    //   2. Identity: pose-tempered cosine to centroid ≥ SUGGESTION_DELTA_MIN
+    //   2. Identity: raw cosine to the scope centroid ≥ suggestion_identity_sim_min
     //
-    // Requires the scope's centroid + pose calibration to compute (2). If
-    // there's no centroid yet, Phase 2 falls back to MP-only since the
-    // suggestion engine couldn't surface anything until centroid is ready.
+    // Requires the scope's centroid to compute (2). If there's no centroid
+    // yet, Phase 2 falls back to MP-only since the suggestion engine couldn't
+    // surface anything until the centroid is ready.
     const connectorPicsRaw: ConnectorPicRow[] = [];
     if (params.folder_path) {
         const links = listLinksForFolderStmt.all(params.folder_path) as {
@@ -148,30 +144,22 @@ const handler: JobHandler = async (ctx: JobContext) => {
     let filteredOutIdentity = 0;
     let filteredOutNoCentroid = 0;
     if (params.folder_path && connectorPicsRaw.length > 0) {
-        const rawMinMp = Number(getSettings().suggestion_min_image_mp);
+        const settings = getSettings();
+        const rawMinMp = Number(settings.suggestion_min_image_mp);
         const minMp = Number.isFinite(rawMinMp) && rawMinMp > 0 ? rawMinMp : 0;
         const minPixels = minMp * 1_000_000;
+        const rawIdMin = Number(settings.suggestion_identity_sim_min);
+        const identitySimMin = Number.isFinite(rawIdMin) && rawIdMin > 0 ? rawIdMin : 0;
 
         const centroidRow = getCentroid('folder', params.folder_path);
         let centroidVec: Float32Array | null = null;
-        let medianSim = 0;
-        let poseCal: ReturnType<typeof loadPoseCalibration> | null = null;
         if (centroidRow) {
             try {
                 centroidVec = decodeEmbedding(centroidRow.centroid_b64);
-                medianSim = centroidRow.median_sim ?? 0;
-                poseCal = loadPoseCalibration([params.folder_path]);
             } catch {
                 centroidVec = null; // degrade to MP-only
             }
         }
-        const poseOverrides = poseCal
-            ? {
-                  threequarter: poseCal.offset_threequarter,
-                  profile: poseCal.offset_profile,
-                  tilted: poseCal.offset_tilted
-              }
-            : null;
 
         const kept: ConnectorPicRow[] = [];
         for (const pic of connectorPicsRaw) {
@@ -195,31 +183,20 @@ const handler: JobHandler = async (ctx: JobContext) => {
             const faces = facesForConnectorPicStmt.all(
                 pic.connector_id,
                 pic.picture_id
-            ) as { embedding_b64: string; pitch: number | null; yaw: number | null }[];
+            ) as { embedding_b64: string }[];
             let bestSim = -Infinity;
-            let bestYaw: number | null = null;
-            let bestPitch: number | null = null;
             for (const f of faces) {
                 try {
-                    const emb = decodeEmbedding(f.embedding_b64);
-                    const sim = dot(emb, centroidVec);
-                    if (sim > bestSim) {
-                        bestSim = sim;
-                        bestYaw = f.yaw;
-                        bestPitch = f.pitch;
-                    }
+                    const sim = dot(decodeEmbedding(f.embedding_b64), centroidVec);
+                    if (sim > bestSim) bestSim = sim;
                 } catch {
                     // skip undecodable face
                 }
             }
-            if (bestSim === -Infinity) {
-                // No usable face — it'll never be a suggestion. Skip.
-                filteredOutIdentity++;
-                continue;
-            }
-            const offset = poseSimOffset(bestYaw, bestPitch, poseOverrides);
-            const tempered = bestSim - medianSim + offset;
-            if (tempered < SUGGESTION_DELTA_MIN) {
+            // Same absolute identity gate the suggestion engine applies, so
+            // we hash exactly the set that can surface (no usable face → never
+            // a suggestion → skip).
+            if (bestSim < identitySimMin) {
                 filteredOutIdentity++;
                 continue;
             }

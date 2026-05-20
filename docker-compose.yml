@@ -18,6 +18,10 @@ services:
     environment:
       # Required for the first download of FLUX.2-Klein (gated repo).
       HF_TOKEN: ${HF_TOKEN:-}
+      # Set to gate the dashboard behind a /login page (session cookie). Pages
+      # redirect to /login, API/data requests 401, until you sign in. Leave
+      # empty for an open instance. Recommended when reachable beyond localhost.
+      GLT_PASSWORD: ${GLT_PASSWORD:-}
       # Defaults already set inside the image; uncomment to override.
       # PORT: "3000"
       # GLT_DB_PATH: /workspace/data/glt.db

@@ -246,6 +246,30 @@ export function datasetHashesForFolders(folder_paths: string[]): Map<string, str
     return out;
 }
 
+export interface DatasetHashRow {
+    image_path: string;
+    folder_path: string;
+    image_width: number | null;
+    image_height: number | null;
+    phash: string;
+}
+
+const activeHashedByFolderStmt = db.prepare(`
+    SELECT image_path, folder_path, image_width, image_height, phash
+      FROM dataset_images
+     WHERE folder_path = ?
+       AND status = 'active'
+       AND phash IS NOT NULL
+`);
+
+/** Every active, hashed image under a folder — full row (with dims) rather
+ * than the phash→path Map. Used by the duplicate-clustering pass, which
+ * needs each individual image (not deduped by phash) plus its resolution
+ * to pick which member of a cluster to keep. */
+export function listActiveHashedByFolder(folder_path: string): DatasetHashRow[] {
+    return activeHashedByFolderStmt.all(folder_path) as DatasetHashRow[];
+}
+
 // ---- Active counts (for max_size enforcement + UI counter) --------------
 
 const countActiveForFolderStmt = db.prepare(

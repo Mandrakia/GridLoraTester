@@ -1,6 +1,8 @@
 <script lang="ts">
     import { page } from '$app/state';
 
+    let { authEnabled = false }: { authEnabled?: boolean } = $props();
+
     interface NavItem {
         href: string;
         label: string;
@@ -79,6 +81,27 @@
             </a>
         {/each}
     </nav>
+
+    {#if authEnabled}
+        <form method="POST" action="/logout" class="border-t border-border p-2">
+            <button type="submit" class="nav-link w-full">
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.75"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3 M10 17l5-5-5-5 M15 12H3" />
+                </svg>
+                <span>Log out</span>
+            </button>
+        </form>
+    {/if}
 
     <div class="border-t border-border p-3 text-xs text-fg-faint">v0.1.0</div>
 </aside>

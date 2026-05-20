@@ -13,7 +13,12 @@
 #     docker run --gpus all -p 3000:3000 \
 #         -v /host/glt-workspace:/workspace \
 #         -e HF_TOKEN=hf_xxx \
+#         -e GLT_PASSWORD=choose-a-strong-one \   # optional: gate ALL requests
 #         ghcr.io/<you>/glt:latest
+#
+# GLT_PASSWORD (optional): when set, the dashboard gates every page behind a
+# /login screen and 401s API/data requests until you sign in (session cookie).
+# Unset = open instance. Set it whenever the port is reachable beyond localhost.
 
 ARG CUDA_IMAGE=nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}

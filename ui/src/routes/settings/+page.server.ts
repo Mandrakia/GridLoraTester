@@ -17,7 +17,9 @@ const FIELDS: SettingKey[] = [
     'lora_root',
     'python_bin',
     'face_gpu_mem_limit_gb',
-    'suggestion_min_image_mp'
+    'suggestion_min_image_mp',
+    'suggestion_identity_sim_min',
+    'dedup_hamming_threshold'
 ];
 
 export const load: PageServerLoad = () => {
@@ -56,7 +58,9 @@ export const actions: Actions = {
         const fileFields = new Set<SettingKey>(['python_bin']);
         const nonPathFields = new Set<SettingKey>([
             'face_gpu_mem_limit_gb',
-            'suggestion_min_image_mp'
+            'suggestion_min_image_mp',
+            'suggestion_identity_sim_min',
+            'dedup_hamming_threshold'
         ]);
 
         for (const key of FIELDS) {
@@ -73,6 +77,16 @@ export const actions: Actions = {
                     const n = Number(raw);
                     if (!Number.isFinite(n) || n < 0 || n > 200) {
                         warnings[key] = 'Must be a number ≥ 0 and ≤ 200 (megapixels).';
+                    }
+                } else if (key === 'suggestion_identity_sim_min' && raw) {
+                    const n = Number(raw);
+                    if (!Number.isFinite(n) || n < 0 || n > 1) {
+                        warnings[key] = 'Must be a cosine similarity between 0 and 1.';
+                    }
+                } else if (key === 'dedup_hamming_threshold' && raw) {
+                    const n = Number(raw);
+                    if (!Number.isInteger(n) || n < 0 || n > 256) {
+                        warnings[key] = 'Must be a whole number between 0 and 256 (bits).';
                     }
                 }
                 continue;

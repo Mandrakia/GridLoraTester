@@ -18,7 +18,18 @@ export type SettingKey =
      * eligible as a suggestion. Low-res candidates pollute LoRA training
      * datasets — at 1 MP we're around 1024×1024 which is the comfortable
      * floor for modern face / portrait models. */
-    | 'suggestion_min_image_mp';
+    | 'suggestion_min_image_mp'
+    /** Identity gate: minimum raw cosine similarity (candidate's best face vs
+     * the scope centroid) for a connector picture to be suggested. Replaces
+     * the old relative tempered-delta floor. Calibrated on buffalo_l: real
+     * different-person pairs top out ~0.21, same-person median ~0.67, so 0.3
+     * separates cleanly while keeping off-axis poses. "0" disables. */
+    | 'suggestion_identity_sim_min'
+    /** Perceptual-hash Hamming distance (out of 256) below which two images
+     * are treated as the same and one is dropped from suggestions. Lower =
+     * stricter (only byte-identical re-saves); higher = collapses burst /
+     * same-scene shots too. Default 32. See DEDUP_HAMMING_THRESHOLD. */
+    | 'dedup_hamming_threshold';
 
 export type Settings = Record<SettingKey, string>;
 
@@ -31,7 +42,9 @@ export const DEFAULT_SETTINGS: Settings = {
     // causes mid-run crashes when the arena hits the limit (the allocator
     // can't release memory back to grow). Setting >0 is at your own risk.
     face_gpu_mem_limit_gb: '0',
-    suggestion_min_image_mp: '1'
+    suggestion_min_image_mp: '1',
+    suggestion_identity_sim_min: '0.3',
+    dedup_hamming_threshold: '32'
 };
 
 const SETTING_KEYS: SettingKey[] = [
@@ -40,7 +53,9 @@ const SETTING_KEYS: SettingKey[] = [
     'lora_root',
     'python_bin',
     'face_gpu_mem_limit_gb',
-    'suggestion_min_image_mp'
+    'suggestion_min_image_mp',
+    'suggestion_identity_sim_min',
+    'dedup_hamming_threshold'
 ];
 
 /** Absolute path to the GridLoraTester repo root — where the `glt/` Python
@@ -67,6 +82,18 @@ export function getSettings(): Settings {
         if (row?.value != null) out[key] = row.value;
     }
     return out;
+}
+
+/** Live perceptual-hash dedup threshold (Hamming bits), parsed from the
+ * `dedup_hamming_threshold` setting with a fallback to the seed default.
+ * Single source of truth: both the connector-suggestion dedup and the
+ * dataset duplicate-clustering pass read it through here so they can never
+ * diverge. Pass an already-loaded `settings` to avoid a redundant read. */
+export function dedupHammingThreshold(settings: Settings = getSettings()): number {
+    const raw = Number(settings.dedup_hamming_threshold);
+    return Number.isFinite(raw) && raw >= 0
+        ? raw
+        : Number(DEFAULT_SETTINGS.dedup_hamming_threshold);
 }
 
 export function updateSettings(patch: Partial<Settings>): Settings {

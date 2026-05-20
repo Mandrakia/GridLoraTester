@@ -12,6 +12,10 @@ import {
 } from '$lib/server/centroids';
 import { suggestExternalPictures } from '$lib/server/connector-suggestions';
 import {
+    findDuplicateClusters,
+    type DuplicatesResult
+} from '$lib/server/dataset-duplicates';
+import {
     countActiveForFolders,
     listExcludedByFolder,
     markExcluded,
@@ -65,6 +69,22 @@ function decoratePruneForFolder(name: string, c: PruneCandidate) {
     };
 }
 
+/** Decorate every duplicate-cluster member with the folder's raw-image
+ * URLs. Folder scope: every member lives under the same URL slug `name`. */
+function decorateDuplicatesForFolder(name: string, result: DuplicatesResult) {
+    const urlFor = (filename: string) => {
+        const base = `/datasets/folder/${encodeURIComponent(name)}/raw/${encodeURIComponent(filename)}`;
+        return { thumbnail_url: `${base}?w=400`, full_url: base };
+    };
+    return {
+        ...result,
+        clusters: result.clusters.map((c) => ({
+            ...c,
+            members: c.members.map((m) => ({ ...m, ...urlFor(m.filename) }))
+        }))
+    };
+}
+
 /** Assert that the image_path is actually under the folder scope. Guards
  * the markExcluded / restoreActive actions against IDs from a different
  * dataset being passed through this scope's action endpoint. */
@@ -111,6 +131,12 @@ export const load: PageServerLoad = ({ params }) => {
                 pose_gaps,
                 framing_gaps
             })
+        ),
+        duplicates: defer(() =>
+            decorateDuplicatesForFolder(
+                params.name,
+                findDuplicateClusters({ folder_paths: [folder] })
+            )
         ),
         prune: defer(() => {
             const p = suggestPruneCandidates({
@@ -226,6 +252,34 @@ export const actions: Actions = {
             return fail(403, { error: (e as Error).message });
         }
         restoreActive(imagePath);
+        const resynced = resyncAfterStatusChange(folder);
+        return { ok: true, resynced_group_ids: resynced };
+    },
+    // Batch exclude — used by the "exclude the other N" duplicate-cluster
+    // action so a whole cluster collapses with a single centroid resync
+    // instead of one per image. `image_paths` is a JSON string array.
+    excludeMany: async ({ params, request }) => {
+        const folder = resolveFolder(params.name);
+        const form = await request.formData();
+        const reason = String(form.get('reason') ?? '') || null;
+        let paths: string[] = [];
+        try {
+            const parsed = JSON.parse(String(form.get('image_paths') ?? '[]'));
+            if (Array.isArray(parsed)) {
+                paths = parsed.filter((p): p is string => typeof p === 'string');
+            }
+        } catch {
+            return fail(400, { error: 'image_paths must be a JSON string array' });
+        }
+        if (paths.length === 0) return fail(400, { error: 'image_paths is empty' });
+        for (const p of paths) {
+            try {
+                assertUnderFolder(folder, p);
+            } catch (e) {
+                return fail(403, { error: (e as Error).message });
+            }
+        }
+        for (const p of paths) markExcluded(p, reason);
         const resynced = resyncAfterStatusChange(folder);
         return { ok: true, resynced_group_ids: resynced };
     }

@@ -24,11 +24,14 @@ db.exec(
     'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);'
 );
 
+// Env overrides let a different image layout (e.g. the RunPod multi-service
+// image, whose venv lives at /opt/venv) repoint a value without forking this
+// script. Unset → the standalone image's defaults, unchanged.
 const DEFAULTS = {
-    dataset_root: '/workspace/datasets',
-    lora_root: '/workspace/outputs',
-    tests_root: '/workspace/grids',
-    python_bin: '/opt/glt-venv/bin/python'
+    dataset_root: process.env.GLT_DATASET_ROOT || '/workspace/datasets',
+    lora_root: process.env.GLT_LORA_ROOT || '/workspace/outputs',
+    tests_root: process.env.GLT_TESTS_ROOT || '/workspace/grids',
+    python_bin: process.env.GLT_PYTHON_BIN || '/opt/glt-venv/bin/python'
 };
 
 const ins = db.prepare(

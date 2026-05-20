@@ -384,6 +384,10 @@
     let showMedian = $state(true);
     let showP20 = $state(true);
     let showMax = $state(true);
+    // Trend smoothing: 0 = raw, 100 = widest window. Maps to a centered
+    // moving-average radius below; symmetric so the peak stays on the
+    // step where it actually occurred (no EMA-style rightward lag).
+    let smoothPct = $state(0);
 
     /** Extract training step from a LoRA filename. Default convention is
      * `<base>_<6-digit step>.safetensors` (ai-toolkit). Falls back to
@@ -502,6 +506,44 @@
         }
         return segs.join(' ');
     }
+
+    /** Centered moving average over a series, ignoring nulls within the
+     * window and preserving nulls at their own index (so gaps still split
+     * the path in pathFor, never bridging missing LoRAs). The window
+     * radius scales with the series length so the visual smoothness feels
+     * consistent whether there are 8 or 60 LoRAs; smoothPct=0 is a no-op. */
+    function smoothSeries(series: (number | null)[]): (number | null)[] {
+        if (smoothPct <= 0) return series;
+        const n = series.length;
+        const maxR = Math.max(1, Math.round(n * 0.2));
+        const r = Math.round((smoothPct / 100) * maxR);
+        if (r <= 0) return series;
+        const out: (number | null)[] = new Array(n).fill(null);
+        for (let i = 0; i < n; i++) {
+            if (series[i] == null) continue;
+            let sum = 0;
+            let cnt = 0;
+            for (let j = Math.max(0, i - r); j <= Math.min(n - 1, i + r); j++) {
+                const v = series[j];
+                if (v != null) {
+                    sum += v;
+                    cnt++;
+                }
+            }
+            out[i] = cnt > 0 ? sum / cnt : null;
+        }
+        return out;
+    }
+
+    // Smoothed series, derived once so the drawn line and the hover
+    // tooltip read the exact same numbers (and we don't recompute the
+    // moving average four times per render). Each tracks smoothPct +
+    // chartPoints. In the mode where a series is all-null (e.g. median
+    // in per-prompt mode) these collapse to all-null and go unused.
+    let medianSmoothed = $derived(smoothSeries(chartPoints.map((p) => p.median)));
+    let p20Smoothed = $derived(smoothSeries(chartPoints.map((p) => p.p20)));
+    let maxSmoothed = $derived(smoothSeries(chartPoints.map((p) => p.max)));
+    let singleSmoothed = $derived(smoothSeries(chartPoints.map((p) => p.single)));
 
     /** Pre-computed set of X-axis indices that should get a tick label.
      * Targets ~8 labels evenly spaced, but the "always show last" rule
@@ -1059,6 +1101,20 @@
                             {/each}
                         </select>
                     </label>
+                    <span class="mx-1 h-3 w-px bg-border"></span>
+                    <label class="flex items-center gap-1.5">
+                        <span class="text-fg-muted">Smooth:</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            bind:value={smoothPct}
+                            class="h-1 w-28 cursor-pointer accent-accent"
+                            aria-label="Trend smoothing amount"
+                        />
+                        <span class="w-8 tabular-nums text-fg-faint">{smoothPct}%</span>
+                    </label>
                     {#if promptSel === 'all'}
                         <span class="mx-1 h-3 w-px bg-border"></span>
                         <span class="text-fg-muted">Series:</span>
@@ -1218,16 +1274,35 @@
 
                             {#if promptSel === 'all'}
                                 {#if showMax}
+                                    {#if smoothPct > 0}
+                                        <path
+                                            d={pathFor(chartPoints.map((p) => p.max))}
+                                            stroke="#7dd3fc"
+                                            stroke-width="1"
+                                            fill="none"
+                                            opacity="0.22"
+                                        />
+                                    {/if}
                                     <path
-                                        d={pathFor(chartPoints.map((p) => p.max))}
+                                        d={pathFor(maxSmoothed)}
                                         stroke="#7dd3fc"
                                         stroke-width="1.5"
                                         fill="none"
                                     />
                                 {/if}
                                 {#if showP20}
+                                    {#if smoothPct > 0}
+                                        <path
+                                            d={pathFor(chartPoints.map((p) => p.p20))}
+                                            stroke="#fcd34d"
+                                            stroke-width="1"
+                                            fill="none"
+                                            stroke-dasharray="6 4"
+                                            opacity="0.22"
+                                        />
+                                    {/if}
                                     <path
-                                        d={pathFor(chartPoints.map((p) => p.p20))}
+                                        d={pathFor(p20Smoothed)}
                                         stroke="#fcd34d"
                                         stroke-width="1.5"
                                         fill="none"
@@ -1235,8 +1310,17 @@
                                     />
                                 {/if}
                                 {#if showMedian}
+                                    {#if smoothPct > 0}
+                                        <path
+                                            d={pathFor(chartPoints.map((p) => p.median))}
+                                            stroke="#6ee7b7"
+                                            stroke-width="1.25"
+                                            fill="none"
+                                            opacity="0.22"
+                                        />
+                                    {/if}
                                     <path
-                                        d={pathFor(chartPoints.map((p) => p.median))}
+                                        d={pathFor(medianSmoothed)}
                                         stroke="#6ee7b7"
                                         stroke-width="2.5"
                                         fill="none"
@@ -1251,15 +1335,24 @@
                                             <circle
                                                 cx={xPos(p.x)}
                                                 cy={yPos(p.median)}
-                                                r="3"
+                                                r="2"
                                                 fill="#6ee7b7"
                                             />
                                         {/if}
                                     {/each}
                                 {/if}
                             {:else}
+                                {#if smoothPct > 0}
+                                    <path
+                                        d={pathFor(chartPoints.map((p) => p.single))}
+                                        stroke="#6ee7b7"
+                                        stroke-width="1.25"
+                                        fill="none"
+                                        opacity="0.22"
+                                    />
+                                {/if}
                                 <path
-                                    d={pathFor(chartPoints.map((p) => p.single))}
+                                    d={pathFor(singleSmoothed)}
                                     stroke="#6ee7b7"
                                     stroke-width="2.5"
                                     fill="none"
@@ -1269,7 +1362,7 @@
                                         <circle
                                             cx={xPos(p.x)}
                                             cy={yPos(p.single)}
-                                            r="3"
+                                            r="2"
                                             fill="#6ee7b7"
                                         />
                                     {/if}
@@ -1292,12 +1385,19 @@
 
                         {#if chartHover}
                             {@const hp = chartPoints[chartHover.idx]}
+                            {@const i = chartHover.idx}
                             <div
                                 class="mt-2 rounded border border-border bg-bg-1 p-2 text-[11px]"
                             >
                                 <div class="font-mono text-fg-muted">{hp.lora}</div>
                                 {#if promptSel === 'all'}
+                                    <!-- Real (raw) series values. When smoothing is
+                                         on we tag the row and add a faint smoothed
+                                         row below so both numbers are visible. -->
                                     <div class="mt-1 flex gap-3 tabular-nums">
+                                        {#if smoothPct > 0}
+                                            <span class="w-12 text-fg-faint">real</span>
+                                        {/if}
                                         {#if showMedian}
                                             <span class="text-emerald-300"
                                                 >median: <b>{fmtScore(hp.median)}</b></span
@@ -1314,10 +1414,41 @@
                                             >
                                         {/if}
                                     </div>
+                                    {#if smoothPct > 0}
+                                        <div class="mt-0.5 flex gap-3 tabular-nums opacity-65">
+                                            <span class="w-12 text-fg-faint">smoothed</span>
+                                            {#if showMedian}
+                                                <span class="text-emerald-300"
+                                                    >median: <b>{fmtScore(medianSmoothed[i])}</b></span
+                                                >
+                                            {/if}
+                                            {#if showP20}
+                                                <span class="text-amber-300"
+                                                    >p20: <b>{fmtScore(p20Smoothed[i])}</b></span
+                                                >
+                                            {/if}
+                                            {#if showMax}
+                                                <span class="text-sky-300"
+                                                    >max: <b>{fmtScore(maxSmoothed[i])}</b></span
+                                                >
+                                            {/if}
+                                        </div>
+                                    {/if}
                                 {:else}
-                                    <div class="mt-1 tabular-nums text-emerald-300">
-                                        score: <b>{fmtScore(hp.single)}</b>
+                                    <div class="mt-1 flex gap-3 tabular-nums text-emerald-300">
+                                        {#if smoothPct > 0}
+                                            <span class="w-12 text-fg-faint">real</span>
+                                        {/if}
+                                        <span>score: <b>{fmtScore(hp.single)}</b></span>
                                     </div>
+                                    {#if smoothPct > 0}
+                                        <div
+                                            class="mt-0.5 flex gap-3 tabular-nums text-emerald-300 opacity-65"
+                                        >
+                                            <span class="w-12 text-fg-faint">smoothed</span>
+                                            <span>score: <b>{fmtScore(singleSmoothed[i])}</b></span>
+                                        </div>
+                                    {/if}
                                 {/if}
                             </div>
                         {/if}

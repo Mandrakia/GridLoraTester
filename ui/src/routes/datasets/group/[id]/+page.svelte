@@ -4,6 +4,7 @@
     import CentroidAction from '$lib/components/CentroidAction.svelte';
     import ConnectorSuggestions from '$lib/components/ConnectorSuggestions.svelte';
     import DatasetAssessment from '$lib/components/DatasetAssessment.svelte';
+    import DatasetDuplicates from '$lib/components/DatasetDuplicates.svelte';
     import DatasetView from '$lib/components/DatasetView.svelte';
     import FramingCoverageTable from '$lib/components/FramingCoverageTable.svelte';
     import MainPanel from '$lib/components/MainPanel.svelte';
@@ -353,6 +354,15 @@
                 <h3 class="text-xs uppercase tracking-wide text-fg-muted">Framing</h3>
                 <FramingCoverageTable coverage={globalFraming} />
             </div>
+            {#await data.duplicates}
+                <p class="text-xs text-fg-faint">Scanning for duplicates…</p>
+            {:then duplicates}
+                <DatasetDuplicates
+                    {duplicates}
+                    excludeAction="?/exclude"
+                    excludeManyAction="?/excludeMany"
+                />
+            {/await}
             {#await data.prune}
                 <p class="text-xs text-fg-faint">Computing prune candidates…</p>
             {:then prune}

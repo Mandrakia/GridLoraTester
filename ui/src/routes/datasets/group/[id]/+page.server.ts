@@ -11,6 +11,10 @@ import {
 } from '$lib/server/centroids';
 import { suggestExternalPictures } from '$lib/server/connector-suggestions';
 import {
+    findDuplicateClusters,
+    type DuplicatesResult
+} from '$lib/server/dataset-duplicates';
+import {
     countActiveForFolders,
     listExcludedByFolder,
     markExcluded,
@@ -71,6 +75,28 @@ function decoratePruneForGroup(
         neighbors: c.neighbors.map((n) => ({
             ...n,
             ...urlFor(n.folder_path, n.filename)
+        }))
+    };
+}
+
+/** Decorate every duplicate-cluster member with group raw-image URLs.
+ * Members can live in different member folders, so each resolves its own
+ * slug via the shared slug map. */
+function decorateDuplicatesForGroup(
+    id: number,
+    slugMap: Map<string, string>,
+    result: DuplicatesResult
+) {
+    const urlFor = (folder_path: string, filename: string) => {
+        const slug = slugMap.get(folder_path) ?? basename(folder_path);
+        const base = `/datasets/group/${id}/raw/${encodeURIComponent(slug)}/${encodeURIComponent(filename)}`;
+        return { thumbnail_url: `${base}?w=400`, full_url: base };
+    };
+    return {
+        ...result,
+        clusters: result.clusters.map((c) => ({
+            ...c,
+            members: c.members.map((m) => ({ ...m, ...urlFor(m.folder_path, m.filename) }))
         }))
     };
 }
@@ -222,6 +248,13 @@ export const load: PageServerLoad = ({ params }) => {
                 framing_gaps: group_framing_gaps
             })
         ),
+        duplicates: defer(() =>
+            decorateDuplicatesForGroup(
+                id,
+                slugMap,
+                findDuplicateClusters({ folder_paths: group.paths })
+            )
+        ),
         prune: defer(() => {
             const p = suggestPruneCandidates({
                 folder_paths: group.paths,
@@ -341,6 +374,37 @@ export const actions: Actions = {
         if (!member) return fail(403, { error: 'image_path is not under any member' });
         restoreActive(imagePath);
         resyncAfterStatusChange(id, group.paths, member);
+        return { ok: true };
+    },
+    // Batch exclude for the "exclude the other N" duplicate-cluster action.
+    // Members can span several group folders, so we recompute each affected
+    // member centroid once, then the group centroid once — not per image.
+    excludeMany: async ({ params, request }) => {
+        const { id, group } = resolveGroup(params.id);
+        const form = await request.formData();
+        const reason = String(form.get('reason') ?? '') || null;
+        let paths: string[] = [];
+        try {
+            const parsed = JSON.parse(String(form.get('image_paths') ?? '[]'));
+            if (Array.isArray(parsed)) {
+                paths = parsed.filter((p): p is string => typeof p === 'string');
+            }
+        } catch {
+            return fail(400, { error: 'image_paths must be a JSON string array' });
+        }
+        if (paths.length === 0) return fail(400, { error: 'image_paths is empty' });
+
+        const affectedFolders = new Set<string>();
+        for (const p of paths) {
+            const member = group.paths.find((f) => isPathInside(f, p));
+            if (!member) {
+                return fail(403, { error: 'image_path is not under any member' });
+            }
+            affectedFolders.add(member);
+        }
+        for (const p of paths) markExcluded(p, reason);
+        for (const folder of affectedFolders) recomputeFolderCentroidFromDb(folder);
+        recomputeGroupCentroidFromDb(id, group.paths);
         return { ok: true };
     }
 };

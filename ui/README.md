@@ -51,3 +51,8 @@ Settings live in `data/glt.db` (SQLite). Override the DB path with the
 npm run build
 node build  # serves on :3000 by default
 ```
+
+Set `GLT_PASSWORD` to gate the dashboard: `hooks.server.ts` then redirects
+page navigations to a `/login` screen and 401s API/data requests until you
+sign in (session cookie). Unset = open instance. Set it whenever the port is
+reachable beyond `localhost`.

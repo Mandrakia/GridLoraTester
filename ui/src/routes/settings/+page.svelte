@@ -220,6 +220,64 @@
                 {/if}
             </div>
 
+            <div class="space-y-1.5">
+                <label for="suggestion_identity_sim_min" class="text-sm font-medium"
+                    >Suggestion identity floor (cosine similarity)</label
+                >
+                <input
+                    id="suggestion_identity_sim_min"
+                    name="suggestion_identity_sim_min"
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={(form?.settings ?? data.settings).suggestion_identity_sim_min}
+                    placeholder="0.3"
+                    class="input max-w-[12rem] font-mono"
+                />
+                <p class="text-xs text-fg-faint">
+                    Minimum face-vs-centroid similarity for a connector photo to be
+                    suggested. Calibrated on ArcFace: different people top out ~0.2, the
+                    same person sits ~0.67 median. Default <span class="font-mono">0.3</span>
+                    keeps off-axis poses (profiles drop to ~0.5); higher rejects more of
+                    them. Set <span class="font-mono">0</span> to disable.
+                </p>
+                {#if form?.warnings?.suggestion_identity_sim_min}
+                    <p class="text-xs text-amber-400">
+                        {form.warnings.suggestion_identity_sim_min}
+                    </p>
+                {/if}
+            </div>
+
+            <div class="space-y-1.5">
+                <label for="dedup_hamming_threshold" class="text-sm font-medium"
+                    >Duplicate sensitivity (Hamming bits)</label
+                >
+                <input
+                    id="dedup_hamming_threshold"
+                    name="dedup_hamming_threshold"
+                    type="number"
+                    step="1"
+                    min="0"
+                    max="256"
+                    value={(form?.settings ?? data.settings).dedup_hamming_threshold}
+                    placeholder="32"
+                    class="input max-w-[12rem] font-mono"
+                />
+                <p class="text-xs text-fg-faint">
+                    How far apart two perceptual hashes (out of 256 bits) can be and
+                    still count as the same photo when deduplicating suggestions. Lower
+                    is stricter. <span class="font-mono">10</span> ≈ byte-identical re-saves;
+                    default <span class="font-mono">32</span> also collapses burst / same-scene
+                    shots; above <span class="font-mono">~64</span> starts merging unrelated photos.
+                </p>
+                {#if form?.warnings?.dedup_hamming_threshold}
+                    <p class="text-xs text-amber-400">
+                        {form.warnings.dedup_hamming_threshold}
+                    </p>
+                {/if}
+            </div>
+
             <div class="flex items-center gap-3 pt-2">
                 <button type="submit" class="btn-primary" disabled={saving}>
                     {saving ? 'Saving…' : 'Save'}

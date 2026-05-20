@@ -24,10 +24,17 @@ const HASH_BITS = 16;
  * to ~5 ms per image. */
 const RESIZE_TO = 256;
 
-/** Hamming distance below which two images are considered the same. Per
- * BlockHash literature, ≤ 10 / 256 is the standard "near-identical" floor
- * (WhatsApp recompress, sharp resize, light edits, mild crop all under). */
-export const DEDUP_HAMMING_THRESHOLD = 10;
+/** Default Hamming distance below which two images are treated as the same.
+ * The live value is the `dedup_hamming_threshold` setting; this is the
+ * fallback and the seed default.
+ *
+ * 10/256 is the BlockHash literature "near-identical" floor (recompress,
+ * resize, light edits) — but on real libraries that only catches byte-level
+ * re-saves. Burst frames of the same moment, where the subject moves a
+ * little, sit around 30-50 bits apart, while genuinely-unrelated photos
+ * cluster above ~64 (measured: a clear bimodal gap). 32 catches typical
+ * bursts with margin below that valley. */
+export const DEDUP_HAMMING_THRESHOLD = 32;
 
 /** Compute a 256-bit perceptual hash from raw image bytes. The image is
  * decoded by Sharp, normalized to RGBA at a fixed canonical size, then
@@ -40,6 +47,12 @@ export const DEDUP_HAMMING_THRESHOLD = 10;
 export async function computeImageHash(bytes: Buffer | Uint8Array): Promise<string | null> {
     try {
         const { data, info } = await sharp(bytes)
+            // Honor the EXIF Orientation tag BEFORE hashing. Sharp reads
+            // stored-orientation pixels by default; without this, the same
+            // photo saved once with orientation baked in and once with the
+            // EXIF flag set hashes to two near-opposite values (Hamming ~150)
+            // and never dedups. `.rotate()` with no args auto-orients.
+            .rotate()
             .ensureAlpha()
             .resize(RESIZE_TO, RESIZE_TO, { fit: 'inside' })
             .raw()

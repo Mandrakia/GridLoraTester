@@ -126,9 +126,15 @@ const listRunningWithPidStmt = db.prepare(
 const insertLogStmt = db.prepare(
     'INSERT INTO job_logs(job_id, level, message) VALUES(?, ?, ?)'
 );
-const listLogsStmt = db.prepare(
-    'SELECT * FROM job_logs WHERE job_id = ? ORDER BY id ASC LIMIT ?'
-);
+// Tail the most recent `limit` lines, then re-sort ascending for display.
+// A plain "ORDER BY id ASC LIMIT ?" returns the OLDEST window, so a long
+// run (>limit log lines) freezes the UI at the timestamp of line #limit
+// while the live tail piles up unseen.
+const listLogsStmt = db.prepare(`
+    SELECT * FROM (
+        SELECT * FROM job_logs WHERE job_id = ? ORDER BY id DESC LIMIT ?
+    ) ORDER BY id ASC
+`);
 // Boot-time job recovery. We can't blindly fail every 'running' row —
 // subprocess handlers (grid-test-run) spawn a detached-ish Python child
 // that often outlives a Node restart (HMR, npm-run-dev quick restart),

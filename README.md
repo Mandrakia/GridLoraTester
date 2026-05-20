@@ -335,6 +335,7 @@ point at existing host paths.
 | Variable | Default | Use |
 |---|---|---|
 | `HF_TOKEN` | — | Hugging Face token. FLUX.2-Klein is a gated repo; required on first download. |
+| `GLT_PASSWORD` | — | **Password gate.** When set, the dashboard requires sign-in: pages redirect to a `/login` screen and API/data requests return `401` until you authenticate (session cookie, 30-day). Unset = open instance. Set it whenever the port is reachable beyond `localhost`. |
 | `PORT` / `HOST` | `3000` / `0.0.0.0` | Dashboard listening port and bind address inside the container. |
 | `GLT_DB_PATH` | `/workspace/data/glt.db` | Override only if you want the DB outside `/workspace`. |
 | `GLT_TORCHINDUCTOR_CACHE_DIR` | `/workspace/cache/torchinductor` | `torch.compile` Inductor cache. Persisting it cuts the cold-start tax by ~3.2× per shape. |

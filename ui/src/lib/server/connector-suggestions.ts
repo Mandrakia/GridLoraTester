@@ -11,7 +11,6 @@ import {
     framingGroupForBand,
     poseGroupForBucket,
     POSE_TARGETS,
-    SUGGESTION_DELTA_MIN,
     SUGGESTION_TOP_N,
     type GroupGap
 } from '../dataset-targets';
@@ -31,13 +30,12 @@ import {
 import { importedKeysForScope } from './dataset-import';
 import { db } from './db';
 import {
-    DEDUP_HAMMING_THRESHOLD,
     hashHammingPacked,
     parseHashPacked,
     type PackedHash
 } from './image-hash';
 import { pathBasename } from './path-utils';
-import { getSettings } from './settings';
+import { dedupHammingThreshold, getSettings } from './settings';
 
 /** Tolerance band: a non-target face whose bbox area falls within this
  * fraction of the target face's area is "comparably prominent" — the
@@ -359,10 +357,23 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
     // Resolution floor — drops low-res pictures before scoring. Stored as
     // a string setting; "0" disables. 1 MP default ≈ 1000×1000, the
     // comfortable LoRA / portrait training floor.
-    const rawMinMp = Number(getSettings().suggestion_min_image_mp);
+    const settings = getSettings();
+    const rawMinMp = Number(settings.suggestion_min_image_mp);
     const min_image_mp =
         Number.isFinite(rawMinMp) && rawMinMp > 0 ? rawMinMp : 0;
     const minPixels = min_image_mp * 1_000_000;
+
+    // Live dedup threshold (out of 256). Governs both dedup passes below —
+    // dataset-vs-candidate and inter-candidate.
+    const dedupThreshold = dedupHammingThreshold(settings);
+
+    // Identity gate: a candidate's best face must score at least this raw
+    // cosine to the scope centroid, else it's dropped as "probably not this
+    // person". Absolute (not relative to the in-sample median, which is
+    // biased high on young datasets and over-rejected genuine off-axis
+    // shots). "0" disables.
+    const rawIdMin = Number(settings.suggestion_identity_sim_min);
+    const identitySimMin = Number.isFinite(rawIdMin) && rawIdMin > 0 ? rawIdMin : 0;
 
     const links = listLinksForScope(input.scope_kind, input.scope_key);
     const has_linked_connectors = links.length > 0;
@@ -491,7 +502,7 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
                         if (bestH === 0) break; // can't beat exact match
                     }
                 }
-                if (bestPath != null && bestH <= DEDUP_HAMMING_THRESHOLD) {
+                if (bestPath != null && bestH <= dedupThreshold) {
                     match = { dataset_path: bestPath, hamming: bestH };
                 }
             }
@@ -543,7 +554,7 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
         }
         let dup = false;
         for (const keptWords of interDedupedPacked) {
-            if (hashHammingPacked(cPacked, keptWords) <= DEDUP_HAMMING_THRESHOLD) {
+            if (hashHammingPacked(cPacked, keptWords) <= dedupThreshold) {
                 dup = true;
                 break;
             }
@@ -556,9 +567,7 @@ export function suggestExternalPictures(input: SuggestInput): SuggestionResult {
         }
     }
 
-    const qualifying = interDeduped.filter(
-        (c) => c.tempered_delta >= SUGGESTION_DELTA_MIN
-    );
+    const qualifying = interDeduped.filter((c) => c.similarity >= identitySimMin);
     const cleanQualifying = qualifying.filter((c) => !c.ambiguous_identity);
     const ambiguous = qualifying.filter((c) => c.ambiguous_identity);
 

@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
+import { runMigrations } from './migrations';
 import { DEFAULT_PROMPT_SETS } from './seeds/prompt-sets';
 
 export const DB_PATH = process.env.GLT_DB_PATH
@@ -438,6 +439,11 @@ for (const [table, column, type] of [
 db.exec(
     'CREATE INDEX IF NOT EXISTS idx_jobs_logical_key ON jobs(type, key_arg1, key_arg2, id DESC)'
 );
+
+// Versioned run-once migrations. Must run AFTER the additive ALTER loop above
+// so columns they touch (e.g. connector_pictures.phash) exist on legacy DBs,
+// and before the dashboard serves HTTP (module load time).
+runMigrations(db);
 
 // Seed the canonical default prompt set on fresh installs. We use "table
 // is empty" as the gate (rather than "first boot" or "INSERT OR IGNORE")
