@@ -20,17 +20,21 @@
 # on /workspace, which is the PAID persistent network volume.
 #
 # Two Python venvs side-by-side (different torch versions, isolated):
-#   /opt/venv               → torch 2.11+cu130 — GLT's `glt/` package + deps
+#   /opt/venv               → torch 2.11+cu128 — GLT's `glt/` package + deps
 #   /opt/ai-toolkit/venv    → torch 2.9.1+cu128 — ai-toolkit's pin
 #
-# Base: nvidia/cuda:13.0 cudnn-devel on Ubuntu 24.04. Drivers ≥ 580 on the
-# host (RunPod L40S/H100/B200 are fine; old A100 driver builds may not load
-# cu130 — pick a "newer drivers" node).
+# Base: nvidia/cuda:12.8 cudnn-devel on Ubuntu 24.04. CUDA 12.8 is the floor
+# for Blackwell (sm_120), and it's also the ceiling on RunPod's RTX 5090 nodes:
+# they run a 570-branch driver that tops out at CUDA 12.8. (nvidia-smi may
+# *claim* "CUDA Version: 13.0" — that's the base image's forward-compat shim
+# lying; torch reads the real driver cap as 12080 = 12.8.) So everything here —
+# torch cu128 AND the from-source onnxruntime — targets CUDA 12.8 and runs on
+# that driver natively, with no forward-compat shim to misfire.
 #
 # Build (context = repo root):
 #     docker build -f docker/runpod/Dockerfile -t <you>/glt-runpod:latest .
 # --------------------------------------------------------------------------
-ARG CUDA_IMAGE=nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04
+ARG CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
 ARG PYTHON_VERSION=3.12
@@ -38,9 +42,20 @@ ARG NODE_VERSION=24
 ARG TORCH_VERSION=2.11.0
 ARG TORCHVISION_VERSION=0.26.0
 ARG TORCHAUDIO_VERSION=2.11.0
-# Nightly: only dev pre-releases exist for 1.27 on the Azure feed; the
-# ".dev0" lower bound makes PEP 440 ordering accept them.
-ARG ORT_VERSION=1.27.0.dev0
+# onnxruntime is built from source (see the ORT build stage below) to get
+# Blackwell sm_120 kernels on CUDA 12.8. v1.24.4 is the last tag before ORT
+# started rewriting sm_120 → "120a" (an accelerated variant that doesn't exist
+# on consumer Blackwell and re-triggers cudaErrorNoKernelImageForDevice).
+ARG ORT_GIT_REF=v1.24.4
+# CUDA arches the ORT kernels are compiled for. The image targets the WHOLE
+# RunPod range, not just the 5090 — keep this in sync with the GPUs you rent:
+#   80 = Ampere A100 · 86 = Ampere A40/A6000/3090 · 89 = Ada 4090/L40S
+#   90 = Hopper H100  · 120 = Blackwell 5090
+# Semicolon list (CMake form; mirrors TORCH_CUDA_ARCH_LIST's dotted form).
+# MORE ARCHES = LONGER COMPILE — narrow it to a single arch for a fast build if
+# you only rent one GPU type. B200 (sm_100) is omitted: v1.24.4's CMake predates
+# it; add "100" if your toolkit builds it cleanly.
+ARG ORT_CUDA_ARCH="80;86;89;90;120"
 # SageAttention 2.x source build (off by default — int8_convrot doesn't need
 # it and it benches negative on Ampere). The arch list below ONLY gates this
 # build: torch + onnxruntime wheels already cover every arch, so inference runs
@@ -102,11 +117,16 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 # giant torch / ai-toolkit / deps layers below.
 # --------------------------------------------------------------------------
 
-# GLT venv at /opt/venv — torch 2.11+cu130 (matches the user's local stack).
+# GLT venv at /opt/venv — torch 2.11+cu128. CUDA 12.8 (not cu130) because the
+# RunPod 5090 host driver tops out at CUDA 12.8 — cu130 dies at init with
+# "The NVIDIA driver on your system is too old (found version 12080)". cu128
+# still ships full sm_120 (Blackwell) kernels, so FLUX-2 inference runs on the
+# 5090 GPU. torch's bundled nvidia-cudnn-cu12 is also what the ORT build links
+# against below, so build- and run-time cuDNN are the same lib.
 RUN uv venv /opt/venv --python python${PYTHON_VERSION} && \
     uv pip install --python /opt/venv/bin/python --no-cache \
         torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} torchaudio==${TORCHAUDIO_VERSION} \
-        --index-url https://download.pytorch.org/whl/cu130
+        --index-url https://download.pytorch.org/whl/cu128
 
 # ostris/ai-toolkit in its own venv at /opt/ai-toolkit/venv (torch 2.9.1+cu128,
 # different from GLT's — isolated). The worker auto-discovers
@@ -127,13 +147,54 @@ WORKDIR /opt/ai-toolkit/ui
 RUN npm install && npm run update_db && npm run build
 
 # --------------------------------------------------------------------------
-# GLT Python deps into /opt/venv. onnxruntime-gpu cu130 nightly comes from the
-# Azure feed (stable PyPI ORT has no CUDA 13 binaries yet); CLAUDE.md pins it.
+# onnxruntime-gpu — BUILT FROM SOURCE with Blackwell sm_120 kernels.
+#
+# Why source: no published ORT wheel does sm_120 on CUDA 12.8. PyPI's CUDA-12
+# wheels lack the kernels (→ cudaErrorNoKernelImageForDevice on a 5090), and
+# the only sm_120 builds (Azure CUDA-13 nightly, community wheels) link CUDA 13
+# → need a ≥580 driver this 570-branch node doesn't have. So we compile ORT
+# against this image's CUDA 12.8 toolkit for the arches in ${ORT_CUDA_ARCH}
+# (Ampere→Blackwell by default): nvcc 12.8 emits native SASS for each, so GPU
+# ArcFace works on every RunPod GPU, and the sm_120 kernels run on a 570.x /
+# CUDA-12.8 driver where no off-the-shelf wheel can.
+#
+# FLASH_ATTENTION=OFF — its kernels are sm_80-only and break the build for
+# sm_120; buffalo_l (SCRFD + ArcFace, all conv nets) doesn't use them anyway.
+#
+# cuDNN: torch's bundled nvidia-cudnn-cu12 (installed in the venv above) — so
+# the lib ORT links at build time is byte-identical to the one loaded at run
+# time. This is the most likely knob to need a tweak: if cmake *configure*
+# (first ~2 min, NOT the 40-min compile) fails to find cuDNN, point
+# --cudnn_home at /usr/local/cuda or /usr instead.
+#
+# This RUN is the long pole of the whole image (~30-45 min: the CUDA provider
+# is hundreds of kernel TUs). --parallel is capped by MAX_JOBS to avoid the
+# compiler OOMing; raise it on a big build host.
 # --------------------------------------------------------------------------
-RUN uv pip install --python /opt/venv/bin/python --no-cache \
-        --prerelease=allow \
-        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
-        "onnxruntime-gpu>=${ORT_VERSION},<1.28"
+RUN git clone --depth 1 --branch ${ORT_GIT_REF} --recursive \
+        https://github.com/microsoft/onnxruntime.git /tmp/ort-build && \
+    uv pip install --python /opt/venv/bin/python --no-cache \
+        cmake ninja packaging setuptools wheel numpy && \
+    cd /tmp/ort-build && \
+    /opt/venv/bin/python tools/ci_build/build.py \
+        --config Release \
+        --update --build \
+        --build_wheel \
+        --parallel ${MAX_JOBS} \
+        --use_cuda \
+        --cuda_home /usr/local/cuda \
+        --cudnn_home /opt/venv/lib/python${PYTHON_VERSION}/site-packages/nvidia/cudnn \
+        --skip_tests \
+        --skip_submodule_sync \
+        --allow_running_as_root \
+        --compile_no_warning_as_error \
+        --cmake_generator Ninja \
+        --build_dir build \
+        --cmake_extra_defines \
+            "CMAKE_CUDA_ARCHITECTURES=${ORT_CUDA_ARCH}" \
+            onnxruntime_USE_FLASH_ATTENTION=OFF && \
+    uv pip install --python /opt/venv/bin/python --no-cache build/Release/dist/*.whl && \
+    rm -rf /tmp/ort-build
 
 COPY requirements.txt /tmp/glt-requirements.txt
 RUN uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/glt-requirements.txt
@@ -180,7 +241,7 @@ ENV GLT_ROOT=/app \
     GLT_TORCHINDUCTOR_CACHE_DIR=/opt/scratch/torchinductor \
     GLT_INT8_CONVROT_CACHE_DIR=/opt/scratch/int8_convrot \
     HF_HOME=/opt/scratch/huggingface \
-    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    HF_XET_HIGH_PERFORMANCE=1 \
     INSIGHTFACE_HOME=/opt/scratch/insightface \
     TORCH_HOME=/opt/scratch/torch \
     XDG_CACHE_HOME=/opt/scratch/cache \

@@ -25,7 +25,9 @@ safetensors>=0.4.5
 sentencepiece>=0.2.0
 protobuf>=4.25
 huggingface_hub>=0.25
-hf_transfer>=0.1.8
+# Xet is huggingface_hub's current high-throughput backend; HF_HUB_ENABLE_HF_TRANSFER
+# is deprecated in favour of HF_XET_HIGH_PERFORMANCE (set in the Dockerfile env).
+hf_xet>=1.0
 
 # --- UI ---------------------------------------------------------------------
 gradio>=4.40.0,<7.0
