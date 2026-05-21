@@ -713,6 +713,13 @@
                         </form>
                     {/if}
                     {#if data.run}
+                        <a
+                            href="/tests/{data.test.id}/export"
+                            class="btn-ghost px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200"
+                            title="Download the grid you see (composite of all runs, manifest + images) as a zip to import on another install"
+                        >⬇ Export grid</a>
+                    {/if}
+                    {#if data.run}
                         {@const st = STATUS_LABELS[data.run.status] ?? STATUS_LABELS.queued}
                         <div class="flex flex-col items-end gap-1">
                             <span

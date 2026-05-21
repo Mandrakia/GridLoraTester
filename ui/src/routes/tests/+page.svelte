@@ -18,6 +18,73 @@
     // job's progress + the test_runs cells count. Stops as soon as no
     // test is active anymore (server returns active_job=null).
     let anyActive = $derived(data.tests.some((t) => t.active_job != null));
+
+    // ---- Import a run (drag-drop a .zip exported from another install) ----
+    type ImportOption = { value: string; label: string };
+    interface ImportAnalysis {
+        token: string;
+        test: { name: string; exists: boolean };
+        prompt: { mode: 'match' | 'create' | 'none'; name: string | null };
+        dataset: { from: string | null; matched: string | null; options: ImportOption[] };
+        lora: { from: string | null; matched: string | null; options: ImportOption[] };
+        counts: { rows: number; cells: number };
+    }
+    let importDragging = $state(false);
+    let importBusy = $state(false);
+    let importError = $state<string | null>(null);
+    let analysis = $state<ImportAnalysis | null>(null);
+    let datasetChoice = $state('none');
+    let loraChoice = $state('none');
+    let committing = $state(false);
+    let fileInput = $state<HTMLInputElement | null>(null);
+
+    async function analyzeZip(file: File) {
+        importError = null;
+        importBusy = true;
+        try {
+            const res = await fetch('/tests/import/analyze', { method: 'POST', body: file });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
+            const a = body as ImportAnalysis;
+            datasetChoice = a.dataset.matched ?? 'none';
+            loraChoice = a.lora.matched ?? 'none';
+            analysis = a;
+        } catch (e) {
+            importError = (e as Error).message;
+        } finally {
+            importBusy = false;
+        }
+    }
+    function onImportDrop(e: DragEvent) {
+        e.preventDefault();
+        importDragging = false;
+        const file = e.dataTransfer?.files?.[0];
+        if (file) void analyzeZip(file);
+    }
+    function onImportPick(e: Event) {
+        const file = (e.currentTarget as HTMLInputElement).files?.[0];
+        if (file) void analyzeZip(file);
+    }
+    async function confirmImport() {
+        if (!analysis) return;
+        committing = true;
+        importError = null;
+        try {
+            const res = await fetch('/tests/import/commit', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ token: analysis.token, dataset: datasetChoice, lora: loraChoice })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
+            analysis = null;
+            window.location.href = `/tests/${body.test_id}`;
+        } catch (e) {
+            importError = (e as Error).message;
+        } finally {
+            committing = false;
+        }
+    }
     $effect(() => {
         if (!anyActive) return;
         const id = setInterval(() => invalidateAll(), 2000);
@@ -206,6 +273,41 @@
             </button>
         </div>
     </header>
+
+    <!-- Import a run exported from another install (drag a .zip, or click) -->
+    <div
+        role="button"
+        tabindex="0"
+        class="flex items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-3 text-xs transition-colors {importDragging
+            ? 'border-sky-400 bg-sky-500/10 text-sky-200'
+            : 'border-border text-fg-muted hover:border-sky-500/50 hover:text-fg'}"
+        ondragover={(e) => {
+            e.preventDefault();
+            importDragging = true;
+        }}
+        ondragleave={() => (importDragging = false)}
+        ondrop={onImportDrop}
+        onclick={() => fileInput?.click()}
+        onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') fileInput?.click();
+        }}
+    >
+        {#if importBusy}
+            Analyzing zip…
+        {:else}
+            ⬆ Drop a run <code class="mx-1">.zip</code> here (or click) to import — exported via ⬇ Export on a test
+        {/if}
+    </div>
+    <input
+        type="file"
+        accept=".zip,application/zip"
+        class="hidden"
+        bind:this={fileInput}
+        onchange={onImportPick}
+    />
+    {#if importError && !analysis}
+        <p class="text-xs text-rose-300">Import failed: {importError}</p>
+    {/if}
 
     <!-- =================== TABLE =================== -->
     <div class="overflow-hidden rounded-lg border border-border bg-bg-1">
@@ -873,4 +975,87 @@
         </section>
     {/if}
     </div>
+
+    {#if analysis}
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div class="w-full max-w-lg space-y-4 rounded-xl border border-border bg-bg-1 p-5 shadow-xl">
+                <h2 class="text-lg font-semibold">Import run → test “{analysis.test.name}”</h2>
+
+                {#if analysis.test.exists}
+                    <p class="text-xs text-amber-300">
+                        A test named “{analysis.test.name}” already exists — the run is added to it,
+                        keeping that test's dataset / LoRA / prompt set.
+                    </p>
+                {/if}
+
+                <dl class="space-y-3 text-sm">
+                    <div>
+                        <dt class="text-xs uppercase tracking-wide text-fg-muted">Prompts</dt>
+                        <dd>
+                            {#if analysis.prompt.mode === 'match'}
+                                matched existing set “{analysis.prompt.name}”
+                            {:else if analysis.prompt.mode === 'create'}
+                                will create set “{analysis.prompt.name}”
+                            {:else}
+                                (none)
+                            {/if}
+                        </dd>
+                    </div>
+
+                    {#if !analysis.test.exists}
+                        <div>
+                            <dt class="text-xs uppercase tracking-wide text-fg-muted">
+                                Dataset{#if analysis.dataset.from}
+                                    <span class="normal-case text-fg-muted"> (from “{analysis.dataset.from}”)</span>
+                                {/if}
+                            </dt>
+                            <dd>
+                                <select bind:value={datasetChoice} class="input mt-1 w-full">
+                                    {#each analysis.dataset.options as o (o.value)}
+                                        <option value={o.value}>{o.label}</option>
+                                    {/each}
+                                </select>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs uppercase tracking-wide text-fg-muted">
+                                LoRA{#if analysis.lora.from}
+                                    <span class="normal-case text-fg-muted"> (from “{analysis.lora.from}”)</span>
+                                {/if}
+                            </dt>
+                            <dd>
+                                <select bind:value={loraChoice} class="input mt-1 w-full">
+                                    {#each analysis.lora.options as o (o.value)}
+                                        <option value={o.value}>{o.label}</option>
+                                    {/each}
+                                </select>
+                            </dd>
+                        </div>
+                    {/if}
+                </dl>
+
+                <p class="text-xs text-fg-muted">
+                    {analysis.counts.rows} LoRA row(s) · {analysis.counts.cells} cell(s)
+                </p>
+                {#if importError}<p class="text-xs text-rose-300">{importError}</p>{/if}
+
+                <div class="flex justify-end gap-2">
+                    <button
+                        type="button"
+                        class="btn-ghost"
+                        onclick={() => (analysis = null)}
+                        disabled={committing}>Cancel</button
+                    >
+                    <button
+                        type="button"
+                        class="btn-primary"
+                        onclick={confirmImport}
+                        disabled={committing}
+                    >
+                        {committing ? 'Importing…' : 'Import'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
 </MainPanel>
