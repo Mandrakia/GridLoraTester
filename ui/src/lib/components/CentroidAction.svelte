@@ -1,9 +1,12 @@
 <script lang="ts">
-    // Button + status pill that triggers the `?/compute-centroid` form
-    // action on whichever route includes this component. Reads from props,
-    // doesn't touch the DB — the caller already loaded the persisted state.
+    // Button + status pill that triggers the `?/analyze` form action on
+    // whichever route includes this component. The action only *enqueues* a
+    // compute-centroid job and returns its id; we then poll /api/jobs/<id>
+    // and keep the button in its spinner until the job reaches a terminal
+    // state. Reads persisted state from props — the caller already loaded it,
+    // and update() refreshes it once the job finishes.
+    import { onDestroy } from 'svelte';
     import { enhance } from '$app/forms';
-    import { invalidateAll } from '$app/navigation';
 
     interface CentroidSummary {
         centroid_b64: string;
@@ -29,6 +32,47 @@
         $props();
 
     let running = $state(false);
+    // Failure raised by the background job itself. The POST only enqueues, so
+    // it succeeds even when the analysis later fails — `error` (from the form
+    // action's fail()) won't cover that case, this does.
+    let jobError = $state<string | null>(null);
+
+    let destroyed = false;
+    onDestroy(() => {
+        destroyed = true;
+    });
+
+    interface JobView {
+        status: string;
+        error: string | null;
+    }
+
+    /** Poll a job until it reaches a terminal state, returning the final
+     * status + error. Transient fetch failures (HMR reload, brief blip) are
+     * swallowed so a momentary hiccup doesn't drop the spinner mid-run. */
+    async function waitForJob(jobId: number): Promise<JobView> {
+        while (!destroyed) {
+            try {
+                const res = await fetch(`/api/jobs/${jobId}`);
+                if (res.ok) {
+                    const { job } = (await res.json()) as { job: JobView | null };
+                    // 404 / vanished row → treat as done; nothing left to wait on.
+                    if (!job) return { status: 'completed', error: null };
+                    if (
+                        job.status === 'completed' ||
+                        job.status === 'failed' ||
+                        job.status === 'cancelled'
+                    ) {
+                        return { status: job.status, error: job.error ?? null };
+                    }
+                }
+            } catch {
+                // transient — keep polling
+            }
+            await new Promise((r) => setTimeout(r, 1200));
+        }
+        return { status: 'cancelled', error: null };
+    }
 
     function fmtDate(iso: string): string {
         try {
@@ -45,10 +89,24 @@
         {action}
         use:enhance={() => {
             running = true;
-            return async ({ update }) => {
-                await update({ reset: false });
+            jobError = null;
+            return async ({ result, update }) => {
+                // Keep spinning until the enqueued job finishes. Defer
+                // update() (which applies the result + refreshes the loaded
+                // centroid) until then, so the pill doesn't flip to "ready"
+                // before the analysis has actually run.
+                const jobId =
+                    result.type === 'success'
+                        ? Number((result.data as { job_id?: unknown } | undefined)?.job_id)
+                        : NaN;
+                if (Number.isFinite(jobId) && jobId > 0) {
+                    const final = await waitForJob(jobId);
+                    if (final.status === 'failed') {
+                        jobError = final.error ?? 'Analysis failed.';
+                    }
+                }
                 running = false;
-                await invalidateAll();
+                if (!destroyed) await update({ reset: false });
             };
         }}
     >
@@ -96,6 +154,6 @@
     {/if}
 </div>
 
-{#if error}
-    <pre class="mt-2 max-h-40 overflow-auto rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-300">{error}</pre>
+{#if jobError ?? error}
+    <pre class="mt-2 max-h-40 overflow-auto rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-300">{jobError ?? error}</pre>
 {/if}

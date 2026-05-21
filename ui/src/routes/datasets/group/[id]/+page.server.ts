@@ -4,7 +4,6 @@ import { basename } from 'node:path';
 
 import { framingGroupGaps, poseGroupGaps } from '$lib/dataset-targets';
 import {
-    computeAndPersist,
     getCentroid,
     recomputeFolderCentroidFromDb,
     recomputeGroupCentroidFromDb
@@ -290,9 +289,11 @@ function resyncAfterStatusChange(
 }
 
 export const actions: Actions = {
-    // Per-member centroid + global group centroid (sync) PLUS one
-    // background image-hash job per member folder. See the folder action
-    // for the rationale on merging into a single user-facing action.
+    // Same background-job pattern as the folder route's analyze: one
+    // compute-centroid job over every existing member folder, with group_id
+    // set so the union 'group' centroid is written too (and a dedup-hash job
+    // fired per folder afterwards). Keyed by group:<id> so its Latest-tab row
+    // doesn't collide with a folder-scope analyze on the same path.
     analyze: async ({ params }) => {
         const { id, group } = resolveGroup(params.id);
         // Only feed paths that actually exist on disk — skipping missing
@@ -302,28 +303,12 @@ export const actions: Actions = {
             return fail(400, { error: 'No existing dataset folders in this group.' });
         }
         try {
-            const result = await computeAndPersist(existing, id);
-            const hash_job_ids: number[] = [];
-            for (const p of existing) {
-                try {
-                    hash_job_ids.push(
-                        enqueue(
-                            'compute-image-hashes',
-                            { folder_path: p },
-                            { key_arg1: p }
-                        )
-                    );
-                } catch {
-                    // ignore per-folder enqueue failures; the centroid is
-                    // the user-visible deliverable
-                }
-            }
-            return {
-                ok: true,
-                per_folder: result.per_folder,
-                global: result.global,
-                hash_job_ids
-            };
+            const job_id = enqueue(
+                'compute-centroid',
+                { paths: existing, group_id: id },
+                { key_arg1: `group:${id}` }
+            );
+            return { ok: true, job_id };
         } catch (e) {
             return fail(500, { error: (e as Error).message });
         }

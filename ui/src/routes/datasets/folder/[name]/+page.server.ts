@@ -5,7 +5,6 @@ import { resolve } from 'node:path';
 
 import { framingGroupGaps, poseGroupGaps } from '$lib/dataset-targets';
 import {
-    computeAndPersist,
     getCentroid,
     recomputeFolderCentroidFromDb,
     recomputeGroupCentroidFromDb
@@ -184,33 +183,15 @@ function resyncAfterStatusChange(folder: string): number[] {
 }
 
 export const actions: Actions = {
-    // Single end-to-end action: detect faces + compute centroid (sync,
-    // returns the summary right away) THEN fire-and-forget enqueue a
-    // background image-hash job for the same folder. One click, one
-    // mental model — both outputs are consumed by the same downstream
-    // suggestion engine so splitting them was just decision fatigue for
-    // the user.
+    // Enqueue the background centroid job (detect faces + centroid, then a
+    // follow-up dedup-hash job — see handlers/compute-centroid.ts) and return
+    // its id right away. CentroidAction polls /api/jobs/<id> so the button
+    // stays spinning for the job's lifetime and the run shows up in /jobs.
     analyze: async ({ params }) => {
         const folder = resolveFolder(params.name);
         try {
-            const result = await computeAndPersist([folder]);
-            let hash_job_id: number | null = null;
-            try {
-                hash_job_id = enqueue(
-                    'compute-image-hashes',
-                    { folder_path: folder },
-                    { key_arg1: folder }
-                );
-            } catch {
-                // Don't fail analyze if the hash job enqueue hiccups —
-                // the centroid is the user-visible deliverable. They can
-                // retry the hash separately if needed.
-            }
-            return {
-                ok: true,
-                summary: result.per_folder[folder] ?? null,
-                hash_job_id
-            };
+            const job_id = enqueue('compute-centroid', { paths: [folder] }, { key_arg1: folder });
+            return { ok: true, job_id };
         } catch (e) {
             return fail(500, { error: (e as Error).message });
         }

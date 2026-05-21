@@ -4,6 +4,7 @@
 // sure handlers are registered before they enqueue.
 import './handlers/connector-face-detect';
 import './handlers/compute-image-hashes';
+import './handlers/compute-centroid';
 import './handlers/grid-test-run';
 import './handlers/test-rescore';
 
