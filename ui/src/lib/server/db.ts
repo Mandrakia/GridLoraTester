@@ -79,6 +79,11 @@ db.exec(`
         -- and never co-resides with the transformer, so there's no offload
         -- knob to expose. Custom Qwen file / dtype lives in advanced_json.
         quant             TEXT NOT NULL DEFAULT 'auto',
+        -- Base model family: 'flux2' (FLUX.2 Klein, default) or 'zimage'
+        -- (Z-Image Turbo). Selects the pipeline + quant set on the Python
+        -- side via glt/engines. A LoRA is trained against one base model, so
+        -- this is a per-test property, not a global setting.
+        model_family      TEXT NOT NULL DEFAULT 'flux2',
         -- torch.compile mode for the transformer:
         --   'on'   — always compile (default; rentable with the disk cache
         --             for any grid of ~3+ images on a single shape)
@@ -424,7 +429,10 @@ for (const [table, column, type] of [
     // (google-photos picker today). last_sync_at + last_sync_count surface
     // in the connector pill's tooltip; other connectors leave them NULL.
     ['connector_links', 'last_sync_at', 'TEXT'],
-    ['connector_links', 'last_sync_count', 'INTEGER']
+    ['connector_links', 'last_sync_count', 'INTEGER'],
+    // Base model family per test (FLUX-2 vs Z-Image Turbo). Existing rows
+    // default to 'flux2' so every pre-Z-Image install keeps running unchanged.
+    ['tests', 'model_family', "TEXT NOT NULL DEFAULT 'flux2'"]
 ] as const) {
     try {
         db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);

@@ -41,13 +41,14 @@
         resolution: '1MP',
         batch_size: 0,
         quant: 'auto',
+        model_family: 'flux2',
         compile_mode: 'on' as 'on' | 'auto' | 'off',
         // advanced
         seed: 42,
         steps: 4,
         guidance: 1.0,
         lora_scale: 1.0,
-        format: 'png',
+        format: 'webp',
         sage_attention: false,
         preload_loras: false,
         shift: '',
@@ -68,12 +69,13 @@
             resolution: '1MP',
             batch_size: 0,
             quant: 'auto',
+            model_family: 'flux2',
         compile_mode: 'on' as 'on' | 'auto' | 'off',
             seed: 42,
             steps: 4,
             guidance: 1.0,
             lora_scale: 1.0,
-            format: 'png',
+            format: 'webp',
             sage_attention: false,
             preload_loras: false,
             shift: '',
@@ -82,6 +84,24 @@
             skip_face: false,
             force: false
         };
+    }
+
+    function onFamilyChange() {
+        // Reset quant + denoise defaults to the chosen family's sensible
+        // values. Only fires on user interaction, so openEdit (which sets the
+        // fields directly, no change event) preserves a saved test's values.
+        f.quant = 'auto';
+        if (f.model_family === 'zimage') {
+            f.steps = 8;
+            f.guidance = 0.0;
+            // Z-Image's variable-length single-stream tokens make torch.compile
+            // recompile per prompt-batch shape (net-negative) — keep it off.
+            f.compile_mode = 'off';
+        } else {
+            f.steps = 4;
+            f.guidance = 1.0;
+            f.compile_mode = 'on';
+        }
     }
 
     function openNew() {
@@ -107,12 +127,13 @@
             resolution: t.resolution ?? '1024x1024',
             batch_size: t.batch_size,
             quant: t.quant,
+            model_family: t.model_family ?? 'flux2',
             compile_mode: t.compile_mode,
             seed: Number(adv.seed ?? 42),
             steps: Number(adv.steps ?? 4),
             guidance: Number(adv.guidance ?? 1.0),
             lora_scale: Number(adv.lora_scale ?? 1.0),
-            format: String(adv.format ?? 'png'),
+            format: String(adv.format ?? 'webp'),
             sage_attention: Boolean(adv.sage_attention),
             preload_loras: Boolean(adv.preload_loras),
             shift: adv.shift != null ? String(adv.shift) : '',
@@ -600,6 +621,24 @@
                     </div>
                 </div>
 
+                <!-- Row 3b: base model family -->
+                <div class="space-y-1.5">
+                    <label for="t-model-family" class="text-sm font-medium">Base model</label>
+                    <select
+                        id="t-model-family"
+                        name="model_family"
+                        class="input"
+                        bind:value={f.model_family}
+                        onchange={onFamilyChange}
+                    >
+                        <option value="flux2">FLUX.2 Klein 9B</option>
+                        <option value="zimage">Z-Image Turbo (6B, distilled)</option>
+                    </select>
+                    <p class="text-xs text-fg-faint">
+                        A LoRA is trained against one base model — pick the one this LoRA targets.
+                    </p>
+                </div>
+
                 <!-- Row 4: quant + compile -->
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div class="space-y-1.5">
@@ -611,15 +650,25 @@
                             bind:value={f.quant}
                         >
                             <option value="auto">Auto (pick by GPU — recommended)</option>
-                            <option value="int8_convrot"
-                                >INT8 ConvRot (Ampere best, ~2× vs FP8 weight)</option
-                            >
-                            <option value="fp8_weight"
-                                >FP8 weight-only (Ada/Hopper native, ~9 GB)</option
-                            >
-                            <option value="fp8_dynamic">FP8 dynamic (Ada/Hopper FP8 cores)</option>
-                            <option value="fp8_quanto">FP8 quanto (legacy, needs CUDA toolkit)</option>
-                            <option value="none">bf16 (no quant, ~22 GB)</option>
+                            {#if f.model_family === 'zimage'}
+                                <option value="int8_convrot"
+                                    >INT8 ConvRot (Ampere best, ~2× vs FP8 weight)</option
+                                >
+                                <option value="fp8_weight"
+                                    >FP8 weight-only (smaller cards)</option
+                                >
+                                <option value="none">bf16 (no quant, ~12 GB)</option>
+                            {:else}
+                                <option value="int8_convrot"
+                                    >INT8 ConvRot (Ampere best, ~2× vs FP8 weight)</option
+                                >
+                                <option value="fp8_weight"
+                                    >FP8 weight-only (Ada/Hopper native, ~9 GB)</option
+                                >
+                                <option value="fp8_dynamic">FP8 dynamic (Ada/Hopper FP8 cores)</option>
+                                <option value="fp8_quanto">FP8 quanto (legacy, needs CUDA toolkit)</option>
+                                <option value="none">bf16 (no quant, ~22 GB)</option>
+                            {/if}
                         </select>
                     </div>
                     <div class="space-y-1.5">
@@ -723,8 +772,9 @@
                                 class="input"
                                 bind:value={f.format}
                             >
-                                <option value="png">png</option>
+                                <option value="webp">webp</option>
                                 <option value="jpg">jpg</option>
+                                <option value="png">png</option>
                             </select>
                         </div>
                         <div class="space-y-1.5">

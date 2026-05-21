@@ -86,9 +86,16 @@ function readInput(data: FormData): TestInput {
         resolution: String(data.get('resolution') ?? '').trim() || '1MP',
         batch_size: Math.max(0, readNumber(data, 'batch_size', 0)),
         quant: String(data.get('quant') ?? 'auto'),
+        model_family: parseModelFamily(data.get('model_family')),
         compile_mode: parseCompileMode(data.get('compile_mode')),
         advanced: readAdvanced(data)
     };
+}
+
+function parseModelFamily(raw: FormDataEntryValue | null): string {
+    const v = String(raw ?? '').trim().toLowerCase();
+    // Unknown / blank → 'flux2' (the historical single-model default).
+    return v === 'zimage' ? 'zimage' : 'flux2';
 }
 
 function parseCompileMode(raw: FormDataEntryValue | null): 'on' | 'auto' | 'off' {

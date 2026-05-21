@@ -39,14 +39,10 @@ from ..adapters.discovery import (
 )
 from ..adapters.lokr import LoKrHookManager, is_lokr_file, load_lokr_data
 from ..adapters.lora import load_base_loras
+from ..engines import DEFAULT_FAMILY, get_engine
 from ..analysis.face import FaceScorer
 from ..analysis.metrics import compute_row_metrics
-from ..generation.decode import batch_decode_latents
-from ..generation.latents import generate_latents_batched
-from ..generation.prompt_cache import (
-    compute_te_model_id,
-    open_cache as open_embed_cache,
-)
+from ..generation.prompt_cache import open_cache as open_embed_cache
 from ..generation.prompt_template import expand_prompts
 from ..generation.prompts import all_prompts_cached, encode_prompts
 from ..output.html import write_html_inline
@@ -55,17 +51,12 @@ from ..pipeline.attention import (
     print_sage_attention_stats,
     sage_attention_stats_snapshot,
 )
-from ..pipeline.build import (
-    QUANT_CHOICES,
-    build_te_pipeline,
-    build_transformer_pipeline,
-)
+from ..pipeline.build import QUANT_CHOICES
 from ..pipeline.int8_convrot import (
     backup_quantized_baseline,
     load_lora_into_quantized,
     restore_quantized_baseline,
 )
-from ..pipeline.loaders import DEFAULT_MODEL_ID as MODEL_ID
 from ..utils.config import load_config, load_prompts as legacy_load_prompts
 
 
@@ -141,14 +132,20 @@ def parse_args():
                         help="Guidance scale (default 1.0)")
     parser.add_argument("--lora-scale", type=float, default=None,
                         help="LoRA strength (default 1.0)")
-    parser.add_argument("--format", choices=["png", "jpg"], default=None,
-                        help="Output image format (default png)")
+    parser.add_argument("--format", choices=["png", "jpg", "webp"], default=None,
+                        help="Output image format (default webp — lossless is "
+                             "wasted on regenerable images)")
     parser.add_argument("--jpg-quality", type=int, default=92,
-                        help="JPEG quality if --format jpg")
+                        help="Lossy quality for --format jpg or webp (0-100)")
 
     # Model + dtypes ----------------------------------------------------
-    parser.add_argument("--model-path", default=MODEL_ID,
-                        help=f"HF repo ID or local diffusers dir. Default: {MODEL_ID}")
+    parser.add_argument("--model-family", default=None,
+                        help="Base model family: 'flux2' (default) or 'zimage'. "
+                             "Overrides the test's model_family in DB mode. Selects "
+                             "the pipeline, quant set, and default model id.")
+    parser.add_argument("--model-path", default=None,
+                        help="HF repo ID or local diffusers dir. Defaults to the "
+                             "model family's canonical repo when unset.")
     parser.add_argument("--transformer-file", default=None,
                         help="Path to a .safetensors with the transformer (FLUX-2 ComfyUI-style).")
     parser.add_argument("--vae-file", default=None,
@@ -230,7 +227,7 @@ def _maybe_patch_shift(shift: float | None) -> None:
         print(f"[shift] override failed: {e}")
 
 
-def _resolve_test_params(args, test_def):
+def _resolve_test_params(args, test_def, engine):
     """CLI args override DB test_def, which overrides hardcoded defaults.
 
     For most fields the argparse default is None so 'user didn't pass it'
@@ -258,10 +255,12 @@ def _resolve_test_params(args, test_def):
         # was reading these, so a UI-only user got their advanced settings
         # silently ignored. Resolve all of them properly now.
         "seed":            pick(args.seed,          advanced.get("seed"),           42),
-        "steps":           pick(args.steps,         advanced.get("steps"),          4),
-        "guidance":        pick(args.guidance,      advanced.get("guidance"),       1.0),
+        # steps/guidance fall back to the engine's family default (FLUX-2: 4 /
+        # 1.0 — unchanged; Z-Image Turbo: 8 / 1.0) when neither CLI nor DB set them.
+        "steps":           pick(args.steps,         advanced.get("steps"),          engine.spec.default_steps),
+        "guidance":        pick(args.guidance,      advanced.get("guidance"),       engine.spec.default_guidance),
         "lora_scale":      pick(args.lora_scale,    advanced.get("lora_scale"),     1.0),
-        "format":          pick(args.format,        advanced.get("format"),         "png"),
+        "format":          pick(args.format,        advanced.get("format"),         "webp"),
         "min_step":        pick(args.min_step,      advanced.get("min_step"),       0),
         "shift":           pick(args.shift,         advanced.get("shift"),          None),
         "sage_attention":  pick(args.sage_attention, advanced.get("sage_attention"), False),
@@ -327,7 +326,21 @@ def run(args=None):
         print(f"[db] loaded test #{args.test_id}: {test_def['name']}  "
               f"({test_def['prompts_source']}, {len(test_def['prompts'])} prompt(s))")
 
-    effective = _resolve_test_params(args, test_def)
+    # ---- Resolve model engine (family) ----
+    # CLI --model-family > test row's model_family > default ('flux2'). The
+    # engine owns the pipeline class, quant set, canonical repo id, and the
+    # family default steps/guidance; --model-path overrides the repo when set.
+    family = (
+        args.model_family
+        or (test_def or {}).get("model_family")
+        or DEFAULT_FAMILY
+    )
+    engine = get_engine(family)
+    args.model_path = args.model_path or engine.spec.default_model_id
+    print(f"[engine] family={engine.spec.family} ({engine.spec.label}) "
+          f"model_path={args.model_path}")
+
+    effective = _resolve_test_params(args, test_def, engine)
     trigger = effective["trigger"]
     resolution = effective["resolution"]
     batch_size_cli = effective["batch_size"]
@@ -493,25 +506,25 @@ def run(args=None):
 
     # ---- Phase 1: encode prompts (Qwen alone on GPU) ----
     embed_cache = open_embed_cache()
-    te_model_id = compute_te_model_id(
+    te_model_id = engine.te_model_id(
         args.model_path, args.qwen_file, effective["qwen_dtype"],
     )
     full_cache_hit = all_prompts_cached(
         embed_cache, [ep.text for ep in expanded], te_model_id,
     ) and not args.qwen_file
     if full_cache_hit:
-        print("[embeds:cache] full hit → skipping Qwen3 load entirely")
+        print("[embeds:cache] full hit → skipping text-encoder load entirely")
         prompt_embeds_list = encode_prompts(
-            None, [ep.text for ep in expanded], embed_cache, te_model_id,
+            None, [ep.text for ep in expanded], embed_cache, te_model_id, engine,
         )
     else:
-        pipe_te = build_te_pipeline(
+        pipe_te = engine.build_te_pipeline(
             model_path=args.model_path,
-            qwen_dtype=effective["qwen_dtype"],
-            qwen_file=args.qwen_file,
+            te_dtype=effective["qwen_dtype"],
+            te_file=args.qwen_file,
         )
         prompt_embeds_list = encode_prompts(
-            pipe_te, [ep.text for ep in expanded], embed_cache, te_model_id,
+            pipe_te, [ep.text for ep in expanded], embed_cache, te_model_id, engine,
         )
         # Radically free Qwen before loading the transformer.
         pipe_te.text_encoder = None
@@ -524,7 +537,7 @@ def run(args=None):
         print("[encode] Qwen unloaded — transformer phase starts with full VRAM")
 
     # ---- Phase 2: transformer + VAE on GPU ----
-    pipe = build_transformer_pipeline(
+    pipe = engine.build_transformer_pipeline(
         quant=quant_resolved,
         model_path=args.model_path,
         transformer_file=args.transformer_file,
@@ -560,7 +573,10 @@ def run(args=None):
                     print(f"  [base-lora] file not found: {p}, skipping")
                     continue
                 sd = _load_lora_sd(str(p))
-                rep = load_lora_into_quantized(pipe.transformer, sd, alpha_scale=weight)
+                rep = load_lora_into_quantized(
+                    pipe.transformer, sd, alpha_scale=weight,
+                    resolver=engine.convrot_lora_resolver(),
+                )
                 base_names.append(nick)
                 base_weights.append(weight)
                 base_meta.append({
@@ -769,6 +785,7 @@ def run(args=None):
                     sd = _load_lora_sd(str(lora))
                     rep = load_lora_into_quantized(
                         pipe.transformer, sd, alpha_scale=effective["lora_scale"],
+                        resolver=engine.convrot_lora_resolver(),
                     )
                     del sd
                     swap_t = time.time() - swap_t0
@@ -825,7 +842,7 @@ def run(args=None):
                     batch_latents = None
                     for attempt in range(MAX_ATTEMPTS):
                         try:
-                            batch_latents = generate_latents_batched(
+                            batch_latents = engine.denoise_batch(
                                 pipe, chunk_embeds,
                                 width=w, height=h,
                                 steps=effective["steps"], guidance=effective["guidance"],
@@ -851,7 +868,7 @@ def run(args=None):
             denoise_t = time.time() - denoise_t0
 
             decode_t0 = time.time()
-            pil_images = batch_decode_latents(pipe, latents, chunk_size=4)
+            pil_images = engine.decode(pipe, latents, chunk_size=4)
             decode_t = time.time() - decode_t0
             for i in range(len(latents)):
                 latents[i] = None

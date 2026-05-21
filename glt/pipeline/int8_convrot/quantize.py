@@ -38,6 +38,21 @@ FLUX2_EXCLUDE_SUBSTRINGS: tuple[str, ...] = (
 )
 
 
+# Z-Image (ZImageTransformer2DModel) — single-stream DiT. We keep ONLY the
+# input/output projections in bf16 (the patch/caption/timestep embedders and
+# the final unpatchify projection — sensitivity-critical, and never touched by
+# ai-toolkit LoRAs). Everything else is quantized: the per-block attention
+# (to_q/to_k/to_v/to_out) and SwiGLU feed_forward (w1/w2/w3) carry the compute,
+# and adaLN_modulation is quantized too — its input is the low-dim, outlier-free
+# timestep embedding (not the token-stream outliers ConvRot's exclusion list
+# guards against), AND ai-toolkit trains a LoRA on it, so quantizing it lets the
+# standard INT8 bake apply that delta with no extra bf16 path.
+ZIMAGE_EXCLUDE_SUBSTRINGS: tuple[str, ...] = (
+    "embedder",          # all_x_embedder, t_embedder, cap_embedder
+    "all_final_layer",   # final linear proj + its adaLN modulation
+)
+
+
 def _is_excluded(qual_name: str, exclude_substrings: tuple[str, ...]) -> bool:
     """Check if `qual_name` contains any substring from the exclusion list."""
     return any(s in qual_name for s in exclude_substrings)

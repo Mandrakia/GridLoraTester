@@ -50,6 +50,10 @@ export interface Test {
     resolution: string;
     batch_size: number;
     quant: string;
+    /** Base model family the test runs against: 'flux2' (default) or 'zimage'.
+     * Selects the pipeline, quant set, and default steps/guidance on the
+     * Python side via the engine registry. */
+    model_family: string;
     compile_mode: 'on' | 'auto' | 'off';
     advanced: Record<string, unknown>;
     created_at: string;
@@ -100,6 +104,7 @@ type TestRecord = {
     resolution: string;
     batch_size: number;
     quant: string;
+    model_family: string;
     compile_mode: 'on' | 'auto' | 'off';
     advanced_json: string;
     created_at: string;
@@ -108,16 +113,16 @@ type TestRecord = {
 
 const SELECT_COLS =
     'id, name, lora_path, dataset_path, dataset_group_id, prompts_path, prompt_set_id, ' +
-    'trigger, resolution, batch_size, quant, compile_mode, advanced_json, ' +
+    'trigger, resolution, batch_size, quant, model_family, compile_mode, advanced_json, ' +
     'created_at, updated_at';
 
 const listStmt = db.prepare(`SELECT ${SELECT_COLS} FROM tests ORDER BY name ASC`);
 const getStmt = db.prepare(`SELECT ${SELECT_COLS} FROM tests WHERE id = ?`);
 const insertStmt = db.prepare(`
     INSERT INTO tests(name, lora_path, dataset_path, dataset_group_id, prompts_path, prompt_set_id,
-                      trigger, resolution, batch_size, quant, compile_mode, advanced_json)
+                      trigger, resolution, batch_size, quant, model_family, compile_mode, advanced_json)
     VALUES(@name, @lora_path, @dataset_path, @dataset_group_id, @prompts_path, @prompt_set_id,
-           @trigger, @resolution, @batch_size, @quant, @compile_mode, @advanced_json)
+           @trigger, @resolution, @batch_size, @quant, @model_family, @compile_mode, @advanced_json)
     RETURNING id
 `);
 const updateStmt = db.prepare(`
@@ -132,6 +137,7 @@ const updateStmt = db.prepare(`
         resolution = @resolution,
         batch_size = @batch_size,
         quant = @quant,
+        model_family = @model_family,
         compile_mode = @compile_mode,
         advanced_json = @advanced_json,
         updated_at = datetime('now')
@@ -163,6 +169,7 @@ function parseRow(r: TestRecord): Test {
         resolution: r.resolution ?? '',
         batch_size: r.batch_size,
         quant: r.quant,
+        model_family: r.model_family ?? 'flux2',
         compile_mode: r.compile_mode,
         advanced,
         created_at: r.created_at,
@@ -386,6 +393,7 @@ export interface TestInput {
     resolution: string;
     batch_size: number;
     quant: string;
+    model_family: string;
     compile_mode: 'on' | 'auto' | 'off';
     advanced: Record<string, unknown>;
 }
@@ -405,6 +413,7 @@ function toRecordParams(t: TestInput) {
         resolution: t.resolution,
         batch_size: t.batch_size,
         quant: t.quant,
+        model_family: t.model_family || 'flux2',
         compile_mode: t.compile_mode,
         advanced_json: JSON.stringify(t.advanced ?? {})
     };

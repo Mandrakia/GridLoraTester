@@ -348,13 +348,14 @@ def load_test_def(conn: sqlite3.Connection, test_id: int) -> dict[str, Any]:
     Caller passes the merged dict into the run loop.
 
     Returns {name, lora_path, trigger, resolution, batch_size, quant,
-    compile_mode, advanced, prompts, tests_root}. Raises LookupError if
-    the test row is missing."""
+    model_family, compile_mode, advanced, prompts, tests_root}. Raises
+    LookupError if the test row is missing."""
     t = conn.execute(
         """
         SELECT id, name, lora_path, dataset_path, dataset_group_id,
                prompts_path, prompt_set_id,
-               trigger, resolution, batch_size, quant, compile_mode, advanced_json
+               trigger, resolution, batch_size, quant, model_family,
+               compile_mode, advanced_json
           FROM tests
          WHERE id = ?
         """,
@@ -419,6 +420,7 @@ def load_test_def(conn: sqlite3.Connection, test_id: int) -> dict[str, Any]:
         "resolution": t["resolution"] or "1MP",
         "batch_size": int(t["batch_size"] or 0),
         "quant": t["quant"] or "auto",
+        "model_family": t["model_family"] or "flux2",
         "compile_mode": t["compile_mode"] or "on",
         "advanced": advanced,
         "prompts": prompts,

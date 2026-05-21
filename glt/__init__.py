@@ -39,3 +39,21 @@ _cache_dir = os.environ.get(
 if _cache_dir and "TORCHINDUCTOR_CACHE_DIR" not in os.environ:
     Path(_cache_dir).mkdir(parents=True, exist_ok=True)
     os.environ["TORCHINDUCTOR_CACHE_DIR"] = _cache_dir
+
+
+# Quiet torchao's benign import noise.
+#
+# torchao 0.17 is the release built FOR torch 2.11+, but it ships optional CUDA
+# kernels GLT never calls — `_C_mxfp8` (tagged cp310-only, so it can't load on a
+# cp312 venv) and `_C_cutlass_90a` (Hopper sm_90a) — and its own quant_api.py
+# trips a SyntaxWarning ('\.' in a non-raw string). GLT's fp8 path uses
+# torch-native fp8 (Float8WeightOnly), NOT those kernels, so the "Failed to
+# load …" / "Unable to import torchao Tensor objects" lines are pure noise with
+# no functional impact — and no torchao version fixes the packaging (0.17 IS the
+# torch-2.11 release). Silence it so it stops cluttering the per-job log. Like
+# the cache dir above, this runs before any entrypoint imports torchao.
+import logging as _logging
+import warnings as _warnings
+
+_warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"torchao.*")
+_logging.getLogger("torchao").setLevel(_logging.ERROR)

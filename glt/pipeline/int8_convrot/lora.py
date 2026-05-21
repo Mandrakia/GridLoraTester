@@ -38,7 +38,7 @@ across the slices (same compression).
 """
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Callable
 
 import torch
 from torch import Tensor, nn
@@ -111,6 +111,30 @@ def _resolve_targets(bfl_key: str) -> list[tuple[str, int | None]]:
     return []
 
 
+# A resolver maps a synthesized `*.lora_A.weight` key to the list of
+# (diffusers_module_name, split_idx) targets it bakes into. Each model family
+# supplies its own (FLUX-2 de-fuses QKV; Z-Image is 1-to-1).
+Resolver = Callable[[str], "list[tuple[str, int | None]]"]
+
+
+def resolve_targets_zimage(key: str) -> list[tuple[str, int | None]]:
+    """Z-Image (ai-toolkit) LoRA → ZImageTransformer2DModel module name.
+
+    ai-toolkit saves Z-Image LoRAs under a ``diffusion_model.`` prefix using
+    the *exact* diffusers module path (e.g.
+    ``diffusion_model.layers.0.attention.to_q.lora_A.weight``). Single-stream
+    keeps q/k/v separate, so there's no fused-QKV split — strip the prefix and
+    the trailing ``.lora_{A,B}.weight`` and the remainder is the module name.
+    """
+    parts = key.split(".")
+    if len(parts) < 4 or parts[0] != "diffusion_model":
+        return []
+    module_name = ".".join(parts[1:-2])
+    if not module_name:
+        return []
+    return [(module_name, None)]
+
+
 def _pair_lora_keys(
     state_dict: dict[str, Tensor],
 ) -> dict[str, dict[str, Tensor]]:
@@ -177,6 +201,7 @@ def load_lora_into_quantized(
     transformer: nn.Module,
     state_dict: dict[str, Tensor],
     alpha_scale: float = 1.0,
+    resolver: Resolver = _resolve_targets,
     verbose: bool = False,
 ) -> dict[str, int]:
     """Walk `state_dict` and bake every recognized LoRA pair into
@@ -209,7 +234,7 @@ def load_lora_into_quantized(
         # Re-synthesize a typical lora_A.weight string so `_resolve_targets`
         # has the canonical layout to parse.
         synthetic = base_key + ".lora_A.weight"
-        targets = _resolve_targets(synthetic)
+        targets = resolver(synthetic)
         if not targets:
             unmatched_key += 1
             if verbose:

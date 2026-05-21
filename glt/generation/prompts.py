@@ -29,6 +29,7 @@ def encode_prompts(
     prompts: list[str],
     cache_conn: sqlite3.Connection,
     te_model_id: str,
+    engine=None,
 ) -> list[torch.Tensor]:
     """Pre-encode every prompt, hitting the embeds cache where possible.
 
@@ -65,7 +66,10 @@ def encode_prompts(
         print(f"[encode] running text encoder on {len(missing)} missing prompt(s)")
         with torch.no_grad():
             for i, p in enumerate(missing):
-                prompt_embeds, _ = pipe_te.encode_prompt(prompt=p)
+                if engine is not None:
+                    prompt_embeds = engine.encode_single(pipe_te, p)
+                else:
+                    prompt_embeds, _ = pipe_te.encode_prompt(prompt=p)
                 prompt_embeds = prompt_embeds.to(
                     device="cuda", dtype=target_dtype, non_blocking=False,
                 ).contiguous()

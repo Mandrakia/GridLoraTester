@@ -61,14 +61,20 @@ from .lora import (
     bake_lora_delta,
     has_baseline,
     load_lora_into_quantized,
+    resolve_targets_zimage,
     restore_quantized_baseline,
 )
-from .quantize import FLUX2_EXCLUDE_SUBSTRINGS, quantize_transformer
+from .quantize import (
+    FLUX2_EXCLUDE_SUBSTRINGS,
+    ZIMAGE_EXCLUDE_SUBSTRINGS,
+    quantize_transformer,
+)
 
 
 __all__ = [
     "CONVROT_GROUP_SIZE",
     "FLUX2_EXCLUDE_SUBSTRINGS",
+    "ZIMAGE_EXCLUDE_SUBSTRINGS",
     "LinearInt8ConvRot",
     "backup_quantized_baseline",
     "bake_lora_delta",
@@ -82,6 +88,7 @@ __all__ = [
     "quantize_transformer",
     "quantize_weight_per_row",
     "recommended_quant_for_gpu",
+    "resolve_targets_zimage",
     "restore_quantized_baseline",
     "rotate_activation",
     "rotate_weight",
