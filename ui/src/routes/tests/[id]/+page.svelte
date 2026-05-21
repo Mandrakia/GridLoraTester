@@ -388,6 +388,12 @@
     // moving-average radius below; symmetric so the peak stays on the
     // step where it actually occurred (no EMA-style rightward lag).
     let smoothPct = $state(0);
+    // Y-axis scale. 'linear' = raw cosine [0,1] (default, unchanged). The two
+    // "headroom" scales stretch the top so a +0.01 near the ceiling reads as
+    // the bigger real gain it is (less room left to close):
+    //   'fisher'  = Fisher z, arctanh(x) — the standard transform for cosine.
+    //   'loghead' = -ln(1-x) — one-sided "fraction of remaining gap closed".
+    let yScale = $state<'linear' | 'fisher' | 'loghead'>('linear');
 
     /** Extract training step from a LoRA filename. Default convention is
      * `<base>_<6-digit step>.safetensors` (ai-toolkit). Falls back to
@@ -483,11 +489,35 @@
         const t = hi === lo ? 0.5 : (x - lo) / (hi - lo);
         return CHART_PAD_L + t * chartPlotW;
     }
+    // Headroom scales: map raw similarity through arctanh / -ln(1-x) so the
+    // top of the range is stretched. Both blow up at 1.0, so they share a
+    // ceiling — scores at/above it pin to the top, scores below 0 pin to the
+    // floor (early-training noise near 0 is meant to look flat; the real gain
+    // lives up near the ceiling).
+    const Y_CEIL = 0.85;
+    const Y_ATANH_CEIL = Math.atanh(Y_CEIL); // ≈ 1.256  (Fisher z)
+    const Y_LOG_CEIL = -Math.log(1 - Y_CEIL); // ≈ 1.897  (-ln(1-x))
     function yPos(score: number): number {
-        // Y axis is fixed [0, 1] (cosine similarity range). Invert because
-        // SVG y grows downward.
+        // Invert because SVG y grows downward.
+        if (yScale === 'fisher' || yScale === 'loghead') {
+            const s = Math.min(Y_CEIL, Math.max(0, score));
+            const norm =
+                yScale === 'fisher'
+                    ? Math.atanh(s) / Y_ATANH_CEIL
+                    : -Math.log(1 - s) / Y_LOG_CEIL;
+            return CHART_PAD_T + (1 - norm) * chartPlotH;
+        }
+        // Linear: fixed [0, 1] cosine range (unchanged default behavior).
         return CHART_PAD_T + (1 - score) * chartPlotH;
     }
+    // Tick set depends on the scale: headroom packs more labels near the top
+    // (capped at Y_CEIL) where the resolution now lives. TH_OK/TH_GOOD stay so
+    // the threshold dashed lines render in all three.
+    let yTicks = $derived(
+        yScale === 'linear'
+            ? [0, 0.25, TH_OK, TH_GOOD, 0.75, 1]
+            : [0, TH_OK, TH_GOOD, 0.6, 0.7, 0.8, Y_CEIL]
+    );
 
     /** Build an SVG path "M x,y L x,y …" from a series, skipping null
      * points by splitting the path into multiple subpaths (so a single
@@ -1115,6 +1145,19 @@
                         />
                         <span class="w-8 tabular-nums text-fg-faint">{smoothPct}%</span>
                     </label>
+                    <span class="mx-1 h-3 w-px bg-border"></span>
+                    <label class="flex items-center gap-1.5">
+                        <span class="text-fg-muted">Y-scale:</span>
+                        <select
+                            bind:value={yScale}
+                            class="rounded border border-border bg-bg-1 px-1.5 py-0.5 text-xs text-fg"
+                            title="Stretch the top of the range so a +0.01 near the ceiling — which closes far more of the remaining gap — reads as the bigger gain it is. Labels stay raw similarity; ceiling 0.85. Fisher z = arctanh(x) (standard for cosine); % left = -ln(1-x) (fraction of remaining gap)."
+                        >
+                            <option value="linear">Linear</option>
+                            <option value="fisher">Headroom (z)</option>
+                            <option value="loghead">Headroom (% left)</option>
+                        </select>
+                    </label>
                     {#if promptSel === 'all'}
                         <span class="mx-1 h-3 w-px bg-border"></span>
                         <span class="text-fg-muted">Series:</span>
@@ -1202,8 +1245,9 @@
                                 fill="rgba(239,68,68,0.05)"
                             />
 
-                            <!-- Y axis ticks at 0, 0.25, 0.35, 0.5, 0.75, 1.0 -->
-                            {#each [0, 0.25, TH_OK, TH_GOOD, 0.75, 1] as ty (ty)}
+                            <!-- Y axis ticks (raw similarity labels; positions
+                                 follow the chosen scale). -->
+                            {#each yTicks as ty (ty)}
                                 <line
                                     x1={CHART_PAD_L}
                                     x2={CHART_PAD_L + chartPlotW}
