@@ -1,7 +1,7 @@
 // Job handler: for a given (connector, person), walk every picture, skip
-// the ones we've already processed, download the rest in-memory, send them
-// to the Python worker for face detection, and persist into
-// connector_pictures + connector_faces.
+// the ones we've already processed, download the rest in-memory, stream them
+// to a per-job Python subprocess for face detection (framed stdin/stdout),
+// and persist into connector_pictures + connector_faces.
 //
 // Idempotent: a re-run only touches pictures whose `picture_id` isn't
 // already in `connector_pictures` for this connector. Cancellation is
@@ -10,32 +10,14 @@ import type { ConnectorId, ConnectorPicture } from '$lib/connectors/types';
 import { db } from '../../db';
 import { getConnector } from '../../connectors/registry';
 import { computeImageHash } from '../../image-hash';
-import { buildFaceWorkerHeaders, requestBytes } from '../../python-worker';
+import { spawnFaceStream, type FaceStreamResult } from '../../face-stream';
+import { getSettings } from '../../settings';
 import { runAdaptivePool, type AdaptivePoolMetrics } from '../adaptive-pool';
 import { PhaseStats } from '../phase-stats';
 import { registerHandler, type JobContext, type JobHandler } from '../runner';
 
-interface DetectFacesBlobResp {
-    image_width: number | null;
-    image_height: number | null;
-    faces: {
-        face_index: number;
-        bbox: number[];
-        det_score: number | null;
-        embedding_b64: string;
-        pitch: number | null;
-        yaw: number | null;
-        roll: number | null;
-    }[];
-    /** Per-phase timings reported by the Python worker (ms). Present on
-     * every successful response since the OOM-fix patch — guard for
-     * older callers regardless. */
-    timing_ms?: {
-        decode: number;
-        detect: number;
-        total: number;
-    };
-}
+// The per-image response shape is `FaceStreamResult` (see face-stream.ts):
+// { image_width, image_height, faces[], timing_ms?, error? }.
 
 // ---- DB statements ------------------------------------------------------
 const existsStmt = db.prepare(
@@ -154,6 +136,12 @@ const handler: JobHandler = async (ctx: JobContext) => {
         );
     }
 
+    // One face-detect subprocess for the whole job: the model loads once and
+    // its stderr (provider binding, recycles, per-image notes) streams into
+    // THIS job's log. .finally() below closes it on success, cancel, or error.
+    const gpuMemGb = Number(getSettings().face_gpu_mem_limit_gb) || 0;
+    const stream = spawnFaceStream({ log: (l, m) => ctx.log(l, m), gpuMemGb });
+
     await runAdaptivePool<ConnectorPicture, PoolItem>({
         inputs: toProcess,
         maxProducers: 4,
@@ -169,11 +157,10 @@ const handler: JobHandler = async (ctx: JobContext) => {
         },
         consume: async ({ pic, bytes }) => {
             const tHttpStart = performance.now();
-            const result = await requestBytes<DetectFacesBlobResp>(
-                '/detect-faces-blob',
-                bytes,
-                { timeoutMs: 60_000, headers: buildFaceWorkerHeaders() }
-            );
+            const result: FaceStreamResult = await stream.detect(bytes);
+            // A per-image failure (decode/detect) comes back as result.error,
+            // not a thrown subprocess crash — surface it as a consume failure.
+            if (result.error) throw new Error(result.error);
             const tHttpEnd = performance.now();
 
             // Perceptual hash: computed on the bytes we already have. The
@@ -245,7 +232,7 @@ const handler: JobHandler = async (ctx: JobContext) => {
             ctx.progress(withFaces + noFace + failed, total, undefined);
             pushMetrics();
         }
-    });
+    }).finally(() => stream.close());
 
     if (ctx.shouldCancel()) {
         ctx.log('info', `Cancelled after ${withFaces + noFace + failed}/${total} pictures.`);

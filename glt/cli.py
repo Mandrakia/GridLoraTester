@@ -26,9 +26,13 @@ def main(argv: list[str] | None = None) -> None:
         from .modes import centroid
         centroid.main(argv)
         return
-    if "--serve" in argv:
-        from .ipc import server
-        server.main(argv)
+    if "--detect-stream" in argv:
+        from .ipc import stream
+        stream.detect_stream_main(argv)
+        return
+    if "--detect-folders" in argv:
+        from .ipc import stream
+        stream.detect_folders_main(argv)
         return
     from .modes import grid
     # `--grid` is the default mode and not an arg the grid parser recognizes

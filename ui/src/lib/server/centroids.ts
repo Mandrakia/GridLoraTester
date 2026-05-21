@@ -1,5 +1,6 @@
-// Pipeline: ask the long-lived Python worker for face embeddings (only its
-// model/ONNX work runs there), then do all the math + persistence in TS.
+// Pipeline: spawn a per-job Python subprocess (`glt --detect-folders`) for
+// face embeddings (only its model/ONNX work runs there), then do all the math
+// + persistence in TS. The subprocess's stderr streams into the job's log.
 //
 // For a single folder: one 'folder' centroid is written. For a group of N
 // folders: N 'folder' centroids + one 'group' centroid (over the union of
@@ -9,10 +10,13 @@
 // `dataset_images`. face_embeddings holds only the per-face vectors.
 // Writers must upsert dataset_images BEFORE inserting face rows so the FK
 // is satisfied; excluded images are filtered out of every read here.
+import { spawn } from 'node:child_process';
+
 import { encodeEmbedding, twoPassCentroid, type PyImage } from './centroid-math';
 import { upsertManual } from './dataset-images';
 import { db } from './db';
-import { request as workerRequest } from './python-worker';
+import { streamLogLines, type LogFn } from './jobs/log-stream';
+import { getSettings, gltRoot } from './settings';
 
 interface PyDataset {
     path: string;
@@ -271,11 +275,60 @@ export function recomputeGroupCentroidFromDb(
     return getCentroid('group', String(groupId));
 }
 
-async function runPython(paths: string[]): Promise<PyOutput> {
-    // The worker keeps the InsightFace model warm across calls; the first
-    // request on a fresh dashboard pays the ~3 s model-load cost, subsequent
-    // ones are detection-only.
-    return workerRequest<PyOutput>('/detect-faces', { paths });
+export interface DetectHooks {
+    /** Optional sink for the subprocess's stderr — the job's log. */
+    log?: LogFn;
+}
+
+/** Spawn `glt --detect-folders` for one scan: it reads the folders, prints
+ * the whole {datasets:[...]} result as a single JSON blob on stdout, and logs
+ * progress to stderr. The model loads once per call (these run as a job, not
+ * per-image, so there's nothing to keep warm across calls). */
+async function runPython(paths: string[], hooks?: DetectHooks): Promise<PyOutput> {
+    const settings = getSettings();
+    if (!settings.python_bin) throw new Error('settings.python_bin not set');
+    const args = ['-u', '-m', 'glt', '--detect-folders', '--paths-json', JSON.stringify(paths)];
+
+    return new Promise<PyOutput>((resolve, reject) => {
+        const child = spawn(settings.python_bin, args, {
+            cwd: gltRoot(),
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, PYTHONUNBUFFERED: '1' }
+        });
+
+        // stdout = the one JSON result blob (collect whole). stderr = human
+        // log → the job's log, plus a bounded tail for the failure message.
+        let stdout = '';
+        child.stdout.setEncoding('utf-8');
+        child.stdout.on('data', (c: string) => {
+            stdout += c;
+        });
+
+        let stderrTail = '';
+        child.stderr.setEncoding('utf-8');
+        child.stderr.on('data', (c: string) => {
+            stderrTail = (stderrTail + c).slice(-4000);
+        });
+        if (hooks?.log) streamLogLines(child.stderr, hooks.log, 'info');
+
+        child.on('error', (e) => reject(new Error(`detect-folders spawn error: ${e.message}`)));
+        child.on('exit', (code) => {
+            if (code !== 0) {
+                reject(
+                    new Error(
+                        `detect-folders exited ${code}` +
+                            (stderrTail ? `: ${stderrTail.slice(-500)}` : '')
+                    )
+                );
+                return;
+            }
+            try {
+                resolve(JSON.parse(stdout) as PyOutput);
+            } catch (e) {
+                reject(new Error(`detect-folders: bad JSON output: ${(e as Error).message}`));
+            }
+        });
+    });
 }
 
 /** Compute + persist centroids for one or more folder paths.
@@ -284,9 +337,10 @@ async function runPython(paths: string[]): Promise<PyOutput> {
  * detected faces. */
 export async function computeAndPersist(
     paths: string[],
-    groupId: number | null = null
+    groupId: number | null = null,
+    hooks?: DetectHooks
 ): Promise<RunResult> {
-    const output = await runPython(paths);
+    const output = await runPython(paths, hooks);
 
     const writeAll = db.transaction((datasets: PyDataset[]) => {
         let persisted_faces = 0;

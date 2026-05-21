@@ -74,46 +74,6 @@ def _cfg_fingerprint(face_cfg: dict) -> str:
     ))
 
 
-def _build_provider_options(providers: list, gpu_mem_limit_gb: float | None) -> list[dict]:
-    """Build the `provider_options` list aligned with `providers` for the
-    `InferenceSession(...)` constructor.
-
-    Why this matters: `FaceAnalysis(providers=, provider_options=)` forwards
-    both kwargs down to each sub-model's `InferenceSession.__init__` (see
-    `insightface/model_zoo/model_zoo.py:94-96`). Passing options at session
-    CREATION binds them to the arena allocator and cuDNN context before any
-    inference runs, which is the only path ORT supports for memory-policy
-    knobs — `session.set_providers()` post-hoc rebinds the provider name
-    list but does NOT reset the underlying arena or cuDNN algo cache that
-    were already initialized.
-
-    The CUDA-side options we set:
-      - `cudnn_conv_algo_search='HEURISTIC'` — one-shot heuristic instead
-        of EXHAUSTIVE benchmark caching that grows per shape forever.
-      - `cudnn_conv_use_max_workspace='0'` — clamp cuDNN workspace to the
-        small default (~32 MB) instead of "as much VRAM as available".
-      - `arena_extend_strategy='kSameAsRequested'` — grow the BFC arena
-        by exactly the requested size, not power-of-two doubling.
-      - `gpu_mem_limit` (only when > 0) — hard cap. Off by default because
-        a tight cap triggers mid-run OOM when the peak working set exceeds
-        it (BFC can't shrink). Useful only when sharing the GPU.
-    """
-    opts: list[dict] = []
-    for p in providers:
-        if p == "CUDAExecutionProvider":
-            cuda_opts: dict = {
-                "cudnn_conv_algo_search": "HEURISTIC",
-                "cudnn_conv_use_max_workspace": "0",
-                "arena_extend_strategy": "kSameAsRequested",
-            }
-            if gpu_mem_limit_gb is not None and gpu_mem_limit_gb > 0:
-                cuda_opts["gpu_mem_limit"] = int(gpu_mem_limit_gb * 1024 * 1024 * 1024)
-            opts.append(cuda_opts)
-        else:
-            opts.append({})
-    return opts
-
-
 def _get_app(face_cfg: dict):
     global _app, _app_cfg_fingerprint
     fp = _cfg_fingerprint(face_cfg)
@@ -125,29 +85,44 @@ def _get_app(face_cfg: dict):
         if "CUDAExecutionProvider" in providers:
             preload_cuda12_libs(face_cfg.get("cuda12_search_dirs"))
 
-        gpu_mem_limit_gb = face_cfg.get("gpu_mem_limit_gb")
-        provider_options = _build_provider_options(providers, gpu_mem_limit_gb)
-
         from insightface.app import FaceAnalysis
         model_name = face_cfg.get("model_name", "buffalo_l")
         det_size = tuple(face_cfg.get("det_size", [640, 640]))
-        kwargs = {
-            "name": model_name,
-            "providers": providers,
-            # Pass at creation time — InsightFace forwards down to every
-            # sub-model's InferenceSession constructor. Doing this post-hoc
-            # via `set_providers()` doesn't reset the already-built arena
-            # / cuDNN cache.
-            "provider_options": provider_options,
-        }
+        # Pass ONLY `providers` — NO provider_options. Forwarding CUDA-EP
+        # provider_options through insightface here makes the CUDA EP silently
+        # fall back to CPU, while the grid's FaceScorer (analysis/face.py),
+        # which passes just `providers`, binds CUDA fine on the SAME image +
+        # ORT. The gpu-mem cap those options carried is off-by-default anyway
+        # (a hard cap OOMs ORT's BFC arena), so dropping them costs nothing.
+        kwargs = {"name": model_name, "providers": providers}
         if face_cfg.get("model_root"):
             kwargs["root"] = face_cfg["model_root"]
-        _stderr(
-            f"[face] loading insightface model={model_name} providers={providers} "
-            f"opts={provider_options}"
-        )
+        _stderr(f"[face] loading insightface model={model_name} providers={providers}")
         app = FaceAnalysis(**kwargs)
         app.prepare(ctx_id=0, det_size=det_size)
+
+        # Surface the providers each ONNX session ACTUALLY bound. onnxruntime
+        # silently drops CUDAExecutionProvider (→ CPU-only) when it can't load
+        # its CUDA libs; that fallback is otherwise invisible — you only notice
+        # via wall-clock. If we asked for CUDA but every session came back
+        # CPU-only, shout about it so it shows up in the job log.
+        try:
+            active = sorted({
+                p
+                for m in app.models.values()
+                if getattr(m, "session", None) is not None
+                for p in m.session.get_providers()
+            })
+        except Exception as e:  # never let introspection break loading
+            active = []
+            _stderr(f"[face] could not read active providers: {e!r}")
+        _stderr(f"[face] active ONNX providers={active}")
+        if "CUDAExecutionProvider" in providers and "CUDAExecutionProvider" not in active:
+            _stderr(
+                "[face] WARNING: requested CUDA but ONNX bound CPU-only — "
+                "onnxruntime could not load its CUDA libs (silent fallback). "
+                "Running on CPU; check the [cuda] preload line above."
+            )
 
         _app = app
         _app_cfg_fingerprint = fp

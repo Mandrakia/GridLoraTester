@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import os
 import site
+import sys
 from pathlib import Path
 
 
@@ -46,6 +47,9 @@ def preload_cuda12_libs(extra_search_dirs: list[str | Path] | None = None) -> in
 
     nvidia_dir = next((d for d in search_dirs if (d / "cublas" / "lib").is_dir()), None)
     if nvidia_dir is None:
+        print("[cuda] no nvidia/<lib>/lib dir on the search path — skipping cu12 "
+              "preload (onnxruntime will fall back to the system loader)",
+              file=sys.stderr, flush=True)
         return 0
 
     # cublas/cublasLt must come before cudnn (cudnn calls into it). We match
@@ -64,6 +68,9 @@ def preload_cuda12_libs(extra_search_dirs: list[str | Path] | None = None) -> in
                 loaded += 1
             except OSError:
                 pass
-    if loaded:
-        print(f"[cuda] preloaded {loaded} lib(s) from {nvidia_dir}")
+    # stderr, NOT stdout: callers like `glt --detect-stream` use stdout for a
+    # binary frame protocol and `--detect-folders` for a JSON blob — a stray
+    # line on stdout would corrupt them.
+    print(f"[cuda] preloaded {loaded} lib(s) from {nvidia_dir}",
+          file=sys.stderr, flush=True)
     return loaded
